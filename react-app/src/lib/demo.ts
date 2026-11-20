@@ -1,8 +1,8 @@
 // Sample data for local development only (?demo). Never part of the published build.
-import type { User } from "firebase/auth";
+import type { User } from "./store";
 import type { TallyVoucherSet, ActivityEntry, MessageEntry, BalanceSet, Customer, Order, Product, Receipt, ServiceJob, Transport } from "./data";
 
-export const demoUser = { email: "demo@example.com", uid: "demo" } as unknown as User;
+export const demoUser: User = { email: "demo@example.com", uid: "demo" };
 
 export const demoCustomers: Customer[] = [
   "AB Infinite", "Adeshivakeshva Rhythm House - Raichur", "Adil Mobile Center", "Amaresh - Gilesugur Camp", "Ashok Reddy - Mantralayam",

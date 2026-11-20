@@ -5,6 +5,8 @@
 //   - every add / edit also writes an entry to the activity log (History).
 import { collection, doc, onSnapshot, serverTimestamp, writeBatch, addDoc, getDocs, query, orderBy, limit, setDoc, type DocumentData, type Timestamp } from "firebase/firestore";
 import { db, auth } from "./firebase";
+import * as local from "./local";
+const LOCAL = local.LOCAL;
 
 export interface Customer { id: string; name: string; mobile?: string }
 export interface Product { id: string; name: string; category?: string; price?: number }
@@ -93,6 +95,7 @@ export function normalizeName(s: string | undefined) {
 /* ---------------- reading (live) ---------------- */
 
 export function listenCollection<T>(name: string, cb: (items: T[], fromCache: boolean) => void, onError?: (e: Error) => void) {
+  if (LOCAL) return local.listenCollection<T>(name, cb, onError);
   return onSnapshot(
     collection(db, name),
     { includeMetadataChanges: true },
@@ -102,6 +105,7 @@ export function listenCollection<T>(name: string, cb: (items: T[], fromCache: bo
 }
 
 export function listenDoc<T>(path: string, id: string, cb: (data: T | null) => void, onError?: (e: Error) => void) {
+  if (LOCAL) return local.listenDoc<T>(path, id, cb, onError);
   return onSnapshot(doc(db, path, id), (d) => cb(d.exists() ? (strip(d.data()) as T) : null), onError);
 }
 
@@ -118,6 +122,8 @@ function displayName(coll: string, data: DocumentData) {
 }
 
 export async function saveRecords(writes: Write[]) {
+  // the local server keeps who/when and writes the history entry itself
+  if (LOCAL) { if (local.currentUser()) await local.saveRecords(writes.map((w) => ({ coll: w.coll, id: w.id, data: stable(strip(w.data)) as Record<string, unknown> }))); return; }
   const user = auth.currentUser;
   if (!user || !writes.length) return;
   const by = user.email || "";
@@ -159,6 +165,7 @@ export async function saveSettings(next: Settings, before: Settings | null) {
 
 // one entry in the activity log for anything that isn't a record change
 export async function logEvent(action: string, details: Record<string, unknown> = {}) {
+  if (LOCAL) { if (local.currentUser()) await local.logEvent(action, stable(details) as Record<string, unknown>); return; }
   const user = auth.currentUser;
   if (!user) return;
   const d = stable(details) as Record<string, unknown>;
@@ -176,6 +183,13 @@ export async function logEvent(action: string, details: Record<string, unknown> 
 // pressing Generate twice with the same text saves it once
 const lastMessage: Record<string, string> = {};
 export async function logMessage(type: string, customer: Customer | null, text: string, inputs: Record<string, unknown>) {
+  if (LOCAL) {
+    const me = local.currentUser();
+    if (!me || lastMessage[type] === text) return;
+    lastMessage[type] = text;
+    await local.saveMessage(uid("m_"), { type, text, inputs: stable(inputs), customerId: customer?.id || "", customerName: customer?.name || "", mobile: customer?.mobile || "", at: new Date().toISOString(), by: me.email });
+    return;
+  }
   const user = auth.currentUser;
   if (!user || lastMessage[type] === text) return;
   lastMessage[type] = text;
@@ -202,6 +216,7 @@ export interface MessageEntry {
 }
 // the latest entries, newest first
 export async function loadLatest<T>(coll: "activity" | "messages", count = 300) {
+  if (LOCAL) return local.loadLatest<T>(coll, count);
   const snap = await getDocs(query(collection(db, coll), orderBy("at", "desc"), limit(count)));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as T);
 }
@@ -209,6 +224,7 @@ export async function loadLatest<T>(coll: "activity" | "messages", count = 300) 
 /* ---------------- Tally balances ---------------- */
 // replaces one company's balances (same document the Windows app's sync writes)
 export async function saveBalances(company: "business" | "cash", entry: BalanceSet & { matched: number; unmatched: string[] }) {
+  if (LOCAL) throw new Error("Balances now come from Tally automatically (every 15 minutes); there's nothing to import.");
   const user = auth.currentUser;
   if (!user) return;
   await setDoc(doc(db, "balances", company), { ...(stable(entry) as object), at: serverTimestamp(), by: user.email || "" });
@@ -223,6 +239,7 @@ export interface TallyVoucher { d: string; t: string; n: string; p: string; a: n
 export interface TallyVoucherSet { company: string; label?: string; tallyCompany?: string; from?: string; to?: string; syncedAt?: string; count?: number; vouchers: TallyVoucher[] }
 // read once when the Tally Match page opens (a few hundred KB; not kept live)
 export async function loadTallyVouchers() {
+  if (LOCAL) return local.loadTally<Record<string, TallyVoucherSet>>("vouchers");
   const snap = await getDocs(collection(db, "tallyVouchers"));
   const out: Record<string, TallyVoucherSet> = {};
   snap.docs.forEach((d) => { out[d.id] = d.data() as TallyVoucherSet; });

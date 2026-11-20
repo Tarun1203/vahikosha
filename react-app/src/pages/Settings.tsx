@@ -12,6 +12,7 @@ import { msgDate } from "@/lib/messages";
 import { APP_UPDATED, APP_VERSION } from "@/version";
 import { cn } from "@/lib/utils";
 import { firebaseProjectId } from "@/lib/firebase";
+import { LOCAL } from "@/lib/local";
 
 type Upi = S["upiList"][number];
 type Bank = S["bankList"][number];
@@ -236,7 +237,7 @@ export function Settings() {
               <dt className="text-neutral-500">Version</dt><dd className="font-semibold">{APP_VERSION}</dd>
               <dt className="text-neutral-500">Last updated</dt><dd className="font-semibold">{msgDate(APP_UPDATED)}</dd>
               <dt className="text-neutral-500">Running as</dt><dd className="font-semibold">{standalone ? "Installed app" : "Website"}</dd>
-              <dt className="text-neutral-500">Database</dt><dd className="font-semibold">{firebaseProjectId}</dd>
+              <dt className="text-neutral-500">Database</dt><dd className="font-semibold">{LOCAL ? "PostgreSQL on the office PC" : firebaseProjectId}</dd>
               <dt className="text-neutral-500">Signed in as</dt><dd className="truncate font-semibold">{user?.email}</dd>
             </dl>
           </Section>

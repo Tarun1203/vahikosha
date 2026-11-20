@@ -13,8 +13,9 @@ function clean(xml: string) {
     .replace(/(<\/?)([A-Za-z]\w*):(?=[A-Za-z_])/g, "$1$2_");
 }
 
-export async function post(body: string): Promise<string> {
-  const res = await fetch(TALLY_URL, { method: "POST", headers: { "Content-Type": "text/xml; charset=utf-8" }, body });
+// every request has a time limit, so a busy Tally is never kept waiting on us
+export async function post(body: string, timeoutMs = 90_000): Promise<string> {
+  const res = await fetch(TALLY_URL, { method: "POST", headers: { "Content-Type": "text/xml; charset=utf-8" }, body, signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error("Tally answered " + res.status);
   const buf = Buffer.from(await res.arrayBuffer());
   // Tally answers in UTF-16 when asked to, otherwise UTF-8

@@ -1,8 +1,12 @@
 // Signed-in user plus the live master data (customers, products, transports,
 // settings), shared by every page.
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { auth } from "./firebase";
+import * as local from "./local";
+
+// what the pages use of the signed-in user (Firebase or local server)
+export interface User { email: string | null; uid?: string }
 import { listenCollection, listenDoc, defaultSettings, type Customer, type Product, type Transport, type Settings, type Order, type ServiceJob, type Receipt, type BalanceSet } from "./data";
 
 interface Store {
@@ -51,6 +55,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
       return;
     }
+    if (local.LOCAL) return local.onAuth((u) => { setUser(u); setAuthReady(true); });
     return onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
   }, []);
 
@@ -64,7 +69,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       listenCollection<Order>("orders", (items) => setOrders(items), fail),
       listenCollection<ServiceJob>("services", (items) => setServices(items), fail),
       listenCollection<Receipt>("receipts", (items) => setReceipts(items), fail),
-      listenCollection<BalanceSet & { id: string }>("balances", (items) => {
+      local.LOCAL ? listenTallyBalances(setBalances, fail) : listenCollection<BalanceSet & { id: string }>("balances", (items) => {
         const map: Record<string, BalanceSet> = {};
         items.forEach((b) => { map[b.id] = b; });
         setBalances(map);
@@ -77,8 +82,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value: Store = {
     user,
     authReady,
-    signIn: async (email, password) => { await signInWithEmailAndPassword(auth, email, password); },
-    signOutUser: () => signOut(auth),
+    signIn: async (email, password) => { if (local.LOCAL) await local.signIn(email, password); else await signInWithEmailAndPassword(auth, email, password); },
+    signOutUser: () => (local.LOCAL ? local.signOut() : signOut(auth)),
     customers,
     products,
     transports,
@@ -92,6 +97,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     error,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+// local server: the Tally balances (and the "last checked" note) from the mirror, refreshed when it changes
+function listenTallyBalances(set: (b: Record<string, BalanceSet>) => void, fail: (e: Error) => void) {
+  let alive = true;
+  const load = () => local.loadTally<Record<string, BalanceSet>>("balances").then((b) => { if (alive) set(b); }).catch(fail);
+  load();
+  const off = local.onChange("tally", load);
+  const timer = setInterval(load, 5 * 60e3);   // keeps "last checked" fresh between mirror runs
+  return () => { alive = false; off(); clearInterval(timer); };
 }
 
 export function useStore() {

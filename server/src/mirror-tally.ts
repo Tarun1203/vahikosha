@@ -38,8 +38,8 @@ const VFETCH = "Date, VoucherTypeName, VoucherNumber, PartyLedgerName, Narration
   "AllInventoryEntries.StockItemName, AllInventoryEntries.ActualQty, AllInventoryEntries.BilledQty, AllInventoryEntries.Rate, AllInventoryEntries.Amount, AllInventoryEntries.Discount, " +
   "AllInventoryEntries.IsDeemedPositive, AllInventoryEntries.GSTHSNName, AllInventoryEntries.BatchAllocations.GodownName, AllInventoryEntries.BatchAllocations.BatchName";
 
-async function mirror(db: pg.Pool, co: Co, company: string) {
-  const say = (s: string) => console.log("[" + company + "] " + s);
+async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => void = console.log) {
+  const say = (s: string) => log("[" + company + "] " + s);
   const run = (await db.query("INSERT INTO sync_runs (company_id, kind) VALUES ($1, 'mirror') RETURNING id", [co])).rows[0].id;
   const c = await db.connect();
   try {
@@ -48,6 +48,9 @@ async function mirror(db: pg.Pool, co: Co, company: string) {
     if (!info) throw new Error("Company not open in Tally: " + company);
     const booksFrom = date(info.BOOKSFROM) || date(info.STARTINGFROM) || "2026-04-01";
     const today = iso(new Date());
+    // Tally only exports the period open on its screen unless the request names it:
+    // always ask for the whole span of the books, so openings are at the start of the books
+    const span = { from: booksFrom, to: today };
     await c.query("BEGIN");
     await c.query("UPDATE companies SET tally_company = $2 WHERE id = $1", [co, company]);
     const years: { id: number; starts: string; ends: string }[] = [];
@@ -72,7 +75,8 @@ async function mirror(db: pg.Pool, co: Co, company: string) {
 
     // ---- ledgers and their opening balance at the start of the books (> 0 = Dr)
     const customers = new Map((await c.query("SELECT id, name FROM customers")).rows.map((r) => [norm(r.name || ""), r.id as string]));
-    const ledgers = await collection(company, "Ledger", "Name, Parent, OpeningBalance, ClosingBalance, IsBillWiseOn, LedgerMobile, LedStateName, PartyGSTIN, PinCode, GUID, Address, BillCreditPeriod");
+    const ledgers = await collection(company, "Ledger", "Name, Parent, OpeningBalance, ClosingBalance, IsBillWiseOn, LedgerMobile, LedStateName, PartyGSTIN, PinCode, GUID, Address, BillCreditPeriod, " +
+      "BillAllocations.Name, BillAllocations.BillDate, BillAllocations.OpeningBalance, BillAllocations.BillCreditPeriod", span);
     const tallyClosing = new Map<string, number>();
     for (const l of ledgers) {
       const name = nameOf(l);
@@ -89,6 +93,19 @@ async function mirror(db: pg.Pool, co: Co, company: string) {
         ON CONFLICT (ledger_id, fy_id) DO UPDATE SET amount = EXCLUDED.amount WHERE ledger_openings.amount <> EXCLUDED.amount`,
         [r.rows[0].id, firstFy.id, r2(-num(l.OPENINGBALANCE))]);
       tallyClosing.set(name, r2(-num(l.CLOSINGBALANCE)));
+      // bills carried in from before the books began
+      for (const ob of list(l["BILLALLOCATIONS.LIST"])) {
+        if (!txt(ob.NAME)) continue;
+        const billDate = date(ob.BILLDATE);
+        // credit period comes as "30 Days" or as a due date like "31-Mar-24"
+        const cp = txt(ob.BILLCREDITPERIOD), cpDays = cp.match(/^(\d+)\s*Days?$/i);
+        const cpDate = Date.parse(cp.replace(/-(\d\d)$/, "-20$1"));
+        const due = cpDays && billDate ? iso(new Date(Date.parse(billDate) + Number(cpDays[1]) * 86400e3)) : !isNaN(cpDate) ? iso(new Date(cpDate + 12 * 3600e3)) : null;
+        await c.query(`INSERT INTO opening_bills (company_id, ledger, name, bill_date, due_date, amount) VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (company_id, ledger, name) DO UPDATE SET bill_date = EXCLUDED.bill_date, due_date = EXCLUDED.due_date, amount = EXCLUDED.amount
+          WHERE (opening_bills.bill_date, opening_bills.due_date, opening_bills.amount) IS DISTINCT FROM (EXCLUDED.bill_date, EXCLUDED.due_date, EXCLUDED.amount)`,
+          [co, name, txt(ob.NAME), billDate, due, r2(-num(ob.OPENINGBALANCE))]);
+      }
     }
 
     // ---- voucher types (base type through the parent chain) and stock masters
@@ -105,11 +122,15 @@ async function mirror(db: pg.Pool, co: Co, company: string) {
     for (const g of await collection(company, "Godown", "Name, Parent"))
       await c.query("INSERT INTO godowns (company_id, name, parent) VALUES ($1, $2, $3) ON CONFLICT (company_id, name) DO UPDATE SET parent = EXCLUDED.parent", [co, nameOf(g), txt(g.PARENT) === "Primary" ? "" : txt(g.PARENT)]);
     const products = new Map((await c.query("SELECT id, name FROM products")).rows.map((r) => [norm(r.name || ""), r.id as string]));
-    const items = await collection(company, "StockItem", "Name, Parent, BaseUnits, GUID, OpeningBalance, OpeningValue");
+    const items = await collection(company, "StockItem", "Name, Parent, BaseUnits, GUID, OpeningBalance, OpeningValue, ClosingBalance, ClosingValue", span);
     for (const s of items)
       await c.query(`INSERT INTO stock_items (company_id, name, group_name, unit, product_id, tally_guid) VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (company_id, name) DO UPDATE SET group_name = EXCLUDED.group_name, unit = EXCLUDED.unit, product_id = COALESCE(EXCLUDED.product_id, stock_items.product_id), tally_guid = EXCLUDED.tally_guid, updated_at = now()`,
         [co, nameOf(s), txt(s.PARENT), txt(s.BASEUNITS), products.get(norm(nameOf(s))) ?? null, txt(s.GUID)]);
+    // Tally's own closing stock (its delivery-note / tracking rules decide it)
+    for (const s of items)
+      await c.query("UPDATE stock_items SET closing_qty = $3, closing_value = $4, closing_at = now() WHERE company_id = $1 AND name = $2",
+        [co, nameOf(s), num(s.CLOSINGBALANCE), r2(-num(s.CLOSINGVALUE))]);
     // opening stock at the start of the books (Tally: negative value = Dr)
     for (const s of items)
       await c.query(`INSERT INTO stock_openings (company_id, fy_id, item, qty, value) VALUES ($1, $2, $3, $4, $5)
@@ -120,7 +141,13 @@ async function mirror(db: pg.Pool, co: Co, company: string) {
     say(groups.length + " groups, " + ledgers.length + " ledgers, " + vtypes.length + " voucher types, " + items.length + " stock items");
 
     // ---- vouchers since the books began
-    const vouchers = await collection(company, "Voucher", VFETCH, { filter: "$Date >= $$Date:\"" + Number(booksFrom.slice(8)) + "-" + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(booksFrom.slice(5, 7)) - 1] + "-" + booksFrom.slice(0, 4) + "\"" });
+    // one month per request: asking Tally for years at once can make it hang
+    const vouchers: Record<string, unknown>[] = [];
+    for (let m = new Date(booksFrom + "T00:00:00Z"); iso(m) <= today; m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) {
+      const from = iso(m), end = iso(new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 0)));
+      vouchers.push(...(await collection(company, "Voucher", VFETCH, { from, to: end < today ? end : today })));
+      await new Promise((r) => setTimeout(r, 300));   // a breather for Tally between months
+    }
     const existing = new Map((await c.query("SELECT id, tally_guid, details->>'alterId' AS alter_id FROM vouchers WHERE company_id = $1 AND owner = 'tally' AND is_current", [co]))
       .rows.map((r) => [r.tally_guid as string, { id: r.id as string, alterId: r.alter_id as string }]));
     const seen = new Set<string>();
@@ -224,7 +251,7 @@ async function mirror(db: pg.Pool, co: Co, company: string) {
     await db.query("UPDATE sync_runs SET finished_at = now(), from_date = $2, to_date = $3, added = $4, changed = $5, ok = $6, totals = $7, error = $8 WHERE id = $1",
       [run, booksFrom, today, added, changed, failures.length === 0 && diffs.length === 0,
        { vouchers: vouchers.length, same, gone, failures: failures.length, ledgersChecked: checked, ledgersDiffer: diffs.length, differ: diffs.slice(0, 50) }, failures.slice(0, 20).join("\n")]);
-    return { failures: failures.length, diffs: diffs.length };
+    return { failures: failures.length, diffs: diffs.length, changed: added + changed + gone };
   } catch (e) {
     await c.query("ROLLBACK").catch(() => {});
     await db.query("UPDATE sync_runs SET finished_at = now(), ok = false, error = $2 WHERE id = $1", [run, (e as Error).message]);
@@ -234,19 +261,23 @@ async function mirror(db: pg.Pool, co: Co, company: string) {
   }
 }
 
-const cfg = loadConfig();
-const db = pool(cfg);
-const only = process.argv[2] as Co | undefined;
-const names = tallyCompanies();
-let bad = 0;
-try {
+// run the mirror for both companies (or one); used by the server every 15 minutes
+export async function runMirror(db: pg.Pool, only?: Co, log: (s: string) => void = console.log) {
+  const names = tallyCompanies();
+  let bad = 0, changed = 0;
   for (const co of (["business", "cash"] as Co[]).filter((x) => !only || x === only)) {
-    if (!names[co]) { console.log("No Tally company set for " + co); continue; }
-    const r = await mirror(db, co, names[co]);
-    bad += r.failures + r.diffs;
+    if (!names[co]) { log("No Tally company set for " + co); continue; }
+    const r = await mirror(db, co, names[co], log);
+    bad += r.failures + r.diffs; changed += r.changed;
   }
-} finally {
-  await db.end();
+  return { bad, changed };
 }
-console.log(bad ? "\nFinished with " + bad + " item(s) to look at (above)." : "\nTally mirror complete: everything matches.");
-process.exit(bad ? 1 : 0);
+
+if (process.argv[1]?.endsWith("mirror-tally.ts")) {
+  const db = pool(loadConfig());
+  let bad = 0;
+  try { bad = (await runMirror(db, process.argv[2] as Co | undefined)).bad; }
+  finally { await db.end(); }
+  console.log(bad ? "\nFinished with " + bad + " item(s) to look at (above)." : "\nTally mirror complete: everything matches.");
+  process.exit(bad ? 1 : 0);
+}

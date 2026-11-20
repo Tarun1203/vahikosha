@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "./firebase";
 import { normalizeName } from "./data";
+import * as local from "./local";
 
 export interface StockItem { n: string; q: number; u?: string }
 export interface StockSet { company: string; label?: string; tallyCompany?: string; syncedAt?: string; items: Record<string, StockItem> }
@@ -20,6 +21,7 @@ async function load<T>(coll: "tallyStock" | "tallyBills"): Promise<Record<string
     const d = await import("./demo");
     return (coll === "tallyStock" ? d.demoTallyStock : d.demoTallyBills) as unknown as Record<string, T>;
   }
+  if (local.LOCAL) return local.loadTally<Record<string, T>>(coll === "tallyStock" ? "stock" : "bills");
   const snap = await getDocs(collection(db, coll));
   const out: Record<string, T> = {};
   snap.docs.forEach((d) => { out[d.id] = d.data() as T; });
@@ -30,9 +32,14 @@ function useLoaded<T>(key: "stock" | "bills", coll: "tallyStock" | "tallyBills")
   const [data, setData] = useState<Record<string, T> | null>(null);
   useEffect(() => {
     let alive = true;
-    if (!cache[key]) cache[key] = load<T>(coll).catch(() => ({})) as never;
-    (cache[key] as unknown as Promise<Record<string, T>>).then((d) => { if (alive) setData(d); });
-    return () => { alive = false; };
+    const get = () => {
+      if (!cache[key]) cache[key] = load<T>(coll).catch(() => ({})) as never;
+      (cache[key] as unknown as Promise<Record<string, T>>).then((d) => { if (alive) setData(d); });
+    };
+    get();
+    // local server: reload when the Tally mirror brings changes
+    const off = local.LOCAL ? local.onChange("tally", () => { delete cache[key]; get(); }) : () => {};
+    return () => { alive = false; off(); };
   }, [key, coll]);
   return data;
 }
