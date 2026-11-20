@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router";
 import { StoreProvider, useStore } from "@/lib/store";
 import { ToastProvider, Icon3D } from "@/components/kit";
@@ -18,6 +19,9 @@ import { Catalog } from "@/pages/Catalog";
 import { TallyMatch } from "@/pages/TallyMatch";
 import { WhatsNew } from "@/pages/WhatsNew";
 import { Ledger } from "@/pages/Ledger";
+
+// the one-time Firebase → PostgreSQL copy: local copy of the app only, left out of the live build
+const ExportFirebase = import.meta.env.DEV ? lazy(() => import("@/pages/ExportFirebase")) : null;
 
 function Gate() {
   const { user, authReady } = useStore();
@@ -50,6 +54,7 @@ function Gate() {
         <Route path="/history" element={<History />} />
         <Route path="/whats-new" element={<WhatsNew />} />
         <Route path="/ledger" element={<Ledger />} />
+        {ExportFirebase && <Route path="/export-firebase" element={<Suspense fallback={null}><ExportFirebase /></Suspense>} />}
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>

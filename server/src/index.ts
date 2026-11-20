@@ -13,6 +13,8 @@
 // No deletes: there is no DELETE route, and the database refuses them anyway.
 // For now it listens on this PC only (127.0.0.1); sign-in is added before phones connect.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import pg from "pg";
 import { loadConfig } from "./config.ts";
 import { pool, tx } from "./db.ts";
@@ -38,10 +40,10 @@ const send = (res: ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
   res.end(JSON.stringify(body));
 };
-async function readBody(req: IncomingMessage): Promise<unknown> {
+async function readBody(req: IncomingMessage, max = 5e6): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const ch of req) { size += ch.length; if (size > 5e6) throw Object.assign(new Error("Body too large"), { status: 413 }); chunks.push(ch); }
+  for await (const ch of req) { size += ch.length; if (size > max) throw Object.assign(new Error("Body too large"), { status: 413 }); chunks.push(ch); }
   if (!chunks.length) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
   catch { throw Object.assign(new Error("Body is not valid JSON"), { status: 400 }); }
@@ -68,6 +70,22 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const ping = setInterval(() => res.write(": ping\n\n"), 25000);
     req.on("close", () => { clearInterval(ping); listeners.delete(res); });
     return;
+  }
+
+  // one-time move from Firebase: the local app sends everything it read; it is
+  // only saved as a backup file here (server/src/import-firebase.ts imports it)
+  if (parts[1] === "import" && parts[2] === "firebase-snapshot" && req.method === "POST") {
+    const snap = (await readBody(req, 300e6)) as { exportedAt?: string; by?: string; collections?: Record<string, unknown[]> };
+    if (!snap.collections || typeof snap.collections !== "object") return send(res, 400, { error: "No collections in the export" });
+    const dir = join(cfg.storage, "..", "backups", "firebase");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "firebase-export-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + ".json");
+    writeFileSync(file, JSON.stringify(snap));
+    const counts = Object.fromEntries(Object.entries(snap.collections).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]));
+    await db.query("INSERT INTO activity (by_user, collection, action, name, details) VALUES ($1, 'app', 'firebase-export-saved', $2, $3)",
+      [String(snap.by || user), file, { file, counts, exportedAt: snap.exportedAt || "" }]);
+    console.log("Firebase export saved: " + file);
+    return send(res, 201, { ok: true, file, counts });
   }
 
   if (parts[1] === "activity" && req.method === "POST") {
@@ -121,7 +139,20 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   return send(res, 405, { error: "Not allowed" });
 }
 
+// the local copy of the app (npm run dev on this PC) may call the server from the browser
+const LOCAL_ORIGINS = new Set(["http://localhost:5173", "http://127.0.0.1:5173"]);
+
 const server = createServer((req, res) => {
+  const origin = String(req.headers.origin || "");
+  if (LOCAL_ORIGINS.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-User, X-Entry-Key, If-Match");
+    res.setHeader("Access-Control-Allow-Methods", "GET, PUT, POST");
+    res.setHeader("Vary", "Origin");
+  } else if (origin) {
+    return send(res, 403, { error: "Not allowed from " + origin });
+  }
+  if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   handle(req, res).catch((e) => {
     const status = (e as { status?: number }).status || 500;
     send(res, status, { error: (e as Error).message });
