@@ -31,7 +31,8 @@ if (Test-Path $cfgPath) {
     http = [ordered]@{ host = "127.0.0.1"; port = 8484 }
     storage = (Join-Path $Root "storage")
   }
-  $cfg | ConvertTo-Json -Depth 4 | Set-Content -Path $cfgPath -Encoding utf8
+  # UTF-8 without a BOM (Windows PowerShell's -Encoding utf8 adds one)
+  [IO.File]::WriteAllText($cfgPath, ($cfg | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
   # only this Windows account (and the system) can read the file
   icacls $cfgPath /inheritance:r /grant:r "$($env:USERNAME):(R,W)" "SYSTEM:(F)" | Out-Null
   Write-Host "Saved the app's database login in $cfgPath"

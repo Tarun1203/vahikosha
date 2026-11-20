@@ -36,6 +36,7 @@ try {
 
   // accounting
   await c.query("INSERT INTO financial_years (company_id, starts, ends) VALUES ('business', '2026-04-01', '2027-03-31')");
+  await c.query("INSERT INTO ledgers (company_id, name, group_name) VALUES ('business', 'Cash', 'Cash-in-Hand'), ('business', 'Test Customer', 'Sundry Debtors')");
   const bal = await c.query(`INSERT INTO vouchers (company_id, vtype, base_type, number, vdate, party, owner, entry_key)
     VALUES ('business', 'App Receipt', 'Receipt', 'T1', '2026-11-20', 'Test Customer', 'app', 'test-key-1') RETURNING id`);
   const vid = bal.rows[0].id;

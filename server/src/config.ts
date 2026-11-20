@@ -13,7 +13,7 @@ export const CONFIG_PATH = process.env.CHITTAM_CONFIG || "D:\\ChittamSuite\\conf
 
 export function loadConfig(): Config {
   let raw: Partial<Config>;
-  try { raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")); }
+  try { raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8").replace(/^﻿/, "")); }   // Windows PowerShell may add a BOM
   catch (e) { throw new Error("Can't read " + CONFIG_PATH + " (run server\\setup-db.ps1 first): " + (e as Error).message); }
   if (!raw.db?.password) throw new Error(CONFIG_PATH + " has no database login.");
   return {
