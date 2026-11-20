@@ -68,17 +68,17 @@ export async function vouchers(db: pg.Pool) {
   return out;
 }
 
+// open bills: the newest copy of Tally's own Bills Receivable report (owed to us only)
 export async function bills(db: pg.Pool) {
   const m = await meta(db);
-  const rows = (await db.query(`WITH p AS (${PARTIES})
-    SELECT b.company_id, b.ledger, b.bill, b.bill_date, b.due_date, b.pending,
-      GREATEST(0, current_date - b.due_date) AS od
-    FROM bills_outstanding b JOIN p ON p.company_id = b.company_id AND p.name = b.ledger
-    WHERE b.pending > 0 ORDER BY b.bill_date`)).rows;
+  const snaps = (await db.query("SELECT DISTINCT ON (company_id) company_id, taken_at, bills FROM tally_bill_snapshots ORDER BY company_id, id DESC")).rows as { company_id: string; taken_at: Date; bills: unknown }[];
   const out: Record<string, unknown> = {};
-  for (const co of ["business", "cash"])
-    out[co] = { company: co, label: m[co]?.label, tallyCompany: m[co]?.tallyCompany, syncedAt: m[co]?.syncedAt, asOn: new Date().toISOString().slice(0, 10),
-      bills: rows.filter((x) => x.company_id === co).map((r) => ({ p: r.ledger, n: r.bill, d: r.bill_date || "", due: r.due_date || "", a: r2(Number(r.pending)), od: r.od ? Number(r.od) : 0 })) };
+  for (const co of ["business", "cash"]) {
+    const sn = snaps.find((x) => x.company_id === co);
+    const list = ((sn?.bills || []) as { p: string; n: string; d: string; due: string; a: number; od: number }[]).filter((b) => b.a > 0);
+    out[co] = { company: co, label: m[co]?.label, tallyCompany: m[co]?.tallyCompany, syncedAt: sn ? new Date(sn.taken_at).toISOString() : m[co]?.syncedAt,
+      asOn: new Date().toISOString().slice(0, 10), bills: list };
+  }
   return out;
 }
 

@@ -14,7 +14,8 @@ import { join } from "node:path";
 import type pg from "pg";
 import { loadConfig } from "./config.ts";
 import { pool } from "./db.ts";
-import { collection, date, list, nameOf, num, txt, yes } from "./tally.ts";
+import { createHash } from "node:crypto";
+import { collection, date, list, nameOf, num, post, txt, yes } from "./tally.ts";
 
 type Co = "business" | "cash";
 
@@ -46,11 +47,12 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
     // ---- company and its financial years (one per April since the books began)
     const info = (await collection(company, "Company", "Name, StartingFrom, BooksFrom", { filter: "$Name = \"" + company.replace(/"/g, "") + "\"" }))[0];
     if (!info) throw new Error("Company not open in Tally: " + company);
-    const booksFrom = date(info.BOOKSFROM) || date(info.STARTINGFROM) || "2026-04-01";
     const today = iso(new Date());
-    // Tally only exports the period open on its screen unless the request names it:
-    // always ask for the whole span of the books, so openings are at the start of the books
-    const span = { from: booksFrom, to: today };
+    // Only the current financial year is mirrored. Ledgers and stock are read the
+    // normal way (Tally's own period, opening = 1 April); asking Tally to recompute
+    // ledgers or bills over a custom range of years made it freeze.
+    const fyStart = (Number(today.slice(5, 7)) >= 4 ? today.slice(0, 4) : String(Number(today.slice(0, 4)) - 1)) + "-04-01";
+    const booksFrom = [date(info.BOOKSFROM) || date(info.STARTINGFROM) || fyStart, fyStart].sort()[1];
     await c.query("BEGIN");
     await c.query("UPDATE companies SET tally_company = $2 WHERE id = $1", [co, company]);
     const years: { id: number; starts: string; ends: string }[] = [];
@@ -76,7 +78,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
     // ---- ledgers and their opening balance at the start of the books (> 0 = Dr)
     const customers = new Map((await c.query("SELECT id, name FROM customers")).rows.map((r) => [norm(r.name || ""), r.id as string]));
     const ledgers = await collection(company, "Ledger", "Name, Parent, OpeningBalance, ClosingBalance, IsBillWiseOn, LedgerMobile, LedStateName, PartyGSTIN, PinCode, GUID, Address, BillCreditPeriod, " +
-      "BillAllocations.Name, BillAllocations.BillDate, BillAllocations.OpeningBalance, BillAllocations.BillCreditPeriod", span);
+      "BillAllocations.Name, BillAllocations.BillDate, BillAllocations.OpeningBalance, BillAllocations.BillCreditPeriod");
     const tallyClosing = new Map<string, number>();
     for (const l of ledgers) {
       const name = nameOf(l);
@@ -92,6 +94,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
       await c.query(`INSERT INTO ledger_openings (ledger_id, fy_id, amount) VALUES ($1, $2, $3)
         ON CONFLICT (ledger_id, fy_id) DO UPDATE SET amount = EXCLUDED.amount WHERE ledger_openings.amount <> EXCLUDED.amount`,
         [r.rows[0].id, firstFy.id, r2(-num(l.OPENINGBALANCE))]);
+      await c.query("UPDATE ledger_openings SET amount = 0 WHERE ledger_id = $1 AND fy_id <> $2 AND amount <> 0", [r.rows[0].id, firstFy.id]);
       tallyClosing.set(name, r2(-num(l.CLOSINGBALANCE)));
       // bills carried in from before the books began
       for (const ob of list(l["BILLALLOCATIONS.LIST"])) {
@@ -122,7 +125,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
     for (const g of await collection(company, "Godown", "Name, Parent"))
       await c.query("INSERT INTO godowns (company_id, name, parent) VALUES ($1, $2, $3) ON CONFLICT (company_id, name) DO UPDATE SET parent = EXCLUDED.parent", [co, nameOf(g), txt(g.PARENT) === "Primary" ? "" : txt(g.PARENT)]);
     const products = new Map((await c.query("SELECT id, name FROM products")).rows.map((r) => [norm(r.name || ""), r.id as string]));
-    const items = await collection(company, "StockItem", "Name, Parent, BaseUnits, GUID, OpeningBalance, OpeningValue, ClosingBalance, ClosingValue", span);
+    const items = await collection(company, "StockItem", "Name, Parent, BaseUnits, GUID, OpeningBalance, OpeningValue, ClosingBalance, ClosingValue");
     for (const s of items)
       await c.query(`INSERT INTO stock_items (company_id, name, group_name, unit, product_id, tally_guid) VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (company_id, name) DO UPDATE SET group_name = EXCLUDED.group_name, unit = EXCLUDED.unit, product_id = COALESCE(EXCLUDED.product_id, stock_items.product_id), tally_guid = EXCLUDED.tally_guid, updated_at = now()`,
@@ -137,6 +140,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
         ON CONFLICT (company_id, fy_id, item) DO UPDATE SET qty = EXCLUDED.qty, value = EXCLUDED.value
         WHERE (stock_openings.qty, stock_openings.value) IS DISTINCT FROM (EXCLUDED.qty, EXCLUDED.value)`,
         [co, firstFy.id, nameOf(s), num(s.OPENINGBALANCE), r2(-num(s.OPENINGVALUE))]);
+    await c.query("UPDATE stock_openings SET qty = 0, value = 0 WHERE company_id = $1 AND fy_id <> $2 AND (qty <> 0 OR value <> 0)", [co, firstFy.id]);
     await c.query("COMMIT");
     say(groups.length + " groups, " + ledgers.length + " ledgers, " + vtypes.length + " voucher types, " + items.length + " stock items");
 
@@ -232,6 +236,24 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
     await c.query("COMMIT");
     say(vouchers.length + " vouchers from " + booksFrom + ": " + added + " added, " + changed + " changed, " + same + " unchanged, " + gone + " no longer in Tally" + (skipped ? ", " + skipped + " optional/skipped" : ""));
     for (const f of failures.slice(0, 10)) say("  NOT SAVED  " + f);
+
+    // ---- open bills, exactly as Tally's Bills Receivable report has them (the report the Windows app always read)
+    const bxml = await post("<ENVELOPE><HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER><BODY><EXPORTDATA><REQUESTDESC><REPORTNAME>Bills Receivable</REPORTNAME>" +
+      "<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>" + company.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</SVCURRENTCOMPANY></STATICVARIABLES>" +
+      "</REQUESTDESC></EXPORTDATA></BODY></ENVELOPE>");
+    const unesc = (x: string) => x.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&apos;/g, "'").replace(/&quot;/g, '"').trim();
+    const tdate = (x: string) => { const t = Date.parse(unesc(x).replace(/-(\d\d)$/, "-20$1")); return isNaN(t) ? "" : iso(new Date(t + 12 * 3600e3)); };
+    const bills: { p: string; n: string; d: string; due: string; a: number; od: number }[] = [];
+    for (const m of bxml.matchAll(/<BILLFIXED>([\s\S]*?)<\/BILLFIXED>([\s\S]*?)(?=<BILLFIXED>|<\/ENVELOPE>)/g)) {
+      const tag = (src: string, t: string) => unesc((src.match(new RegExp("<" + t + ">([^<]*)</" + t + ">")) || [])[1] || "");
+      const a = r2(-num(tag(m[2], "BILLCL")));
+      if (!a) continue;
+      bills.push({ p: tag(m[1], "BILLPARTY"), n: tag(m[1], "BILLREF"), d: tdate(tag(m[1], "BILLDATE")), due: tdate(tag(m[2], "BILLDUE")), a, od: Math.max(0, num(tag(m[2], "BILLOVERDUE"))) });
+    }
+    const bhash = createHash("sha256").update(JSON.stringify(bills)).digest("hex");
+    const lastB = (await c.query("SELECT hash FROM tally_bill_snapshots WHERE company_id = $1 ORDER BY id DESC LIMIT 1", [co])).rows[0];
+    if (lastB?.hash !== bhash) await c.query("INSERT INTO tally_bill_snapshots (company_id, hash, bills) VALUES ($1, $2, $3)", [co, bhash, JSON.stringify(bills)]);
+    say(bills.filter((b) => b.a > 0).length + " open bills from Tally's Bills Receivable" + (lastB?.hash === bhash ? " (no change)" : ""));
 
     // ---- check: balance-sheet ledgers' closing balance against Tally's
     const ours = new Map((await c.query(`SELECT k.name, COALESCE((SELECT sum(o.amount) FROM ledger_openings o WHERE o.ledger_id = k.id), 0)
