@@ -35,12 +35,12 @@ try {
   await refused("history can't be edited", "UPDATE activity SET action = 'x' WHERE record_id = 't1'");
 
   // accounting
-  await c.query("INSERT INTO financial_years (company_id, starts, ends) VALUES ('business', '2026-04-01', '2027-03-31')");
-  await c.query("INSERT INTO ledgers (company_id, name, group_name) VALUES ('business', 'Cash', 'Cash-in-Hand'), ('business', 'Test Customer', 'Sundry Debtors')");
+  await c.query("INSERT INTO financial_years (company_id, starts, ends) VALUES ('business', '2026-04-01', '2027-03-31') ON CONFLICT DO NOTHING");
+  await c.query("INSERT INTO ledgers (company_id, name, group_name) VALUES ('business', 'Check Cash', 'Cash-in-Hand'), ('business', 'Check Customer', 'Sundry Debtors')");
   const bal = await c.query(`INSERT INTO vouchers (company_id, vtype, base_type, number, vdate, party, owner, entry_key)
     VALUES ('business', 'App Receipt', 'Receipt', 'T1', '2026-11-20', 'Test Customer', 'app', 'test-key-1') RETURNING id`);
   const vid = bal.rows[0].id;
-  await c.query("INSERT INTO voucher_entries (voucher_id, line, ledger, amount, is_party) VALUES ($1, 1, 'Cash', 1000, false), ($1, 2, 'Test Customer', -1000, true)", [vid]);
+  await c.query("INSERT INTO voucher_entries (voucher_id, line, ledger, amount, is_party) VALUES ($1, 1, 'Check Cash', 1000, false), ($1, 2, 'Check Customer', -1000, true)", [vid]);
   await c.query("SAVEPOINT s");
   try { await c.query("SET CONSTRAINTS ALL IMMEDIATE"); ok("balanced voucher is accepted"); } catch (e) { bad("balanced voucher is accepted", (e as Error).message); }
   await c.query("ROLLBACK TO SAVEPOINT s");
@@ -48,7 +48,7 @@ try {
   const unb = await c.query(`INSERT INTO vouchers (company_id, vtype, base_type, number, vdate, party, owner, entry_key)
     VALUES ('business', 'App Receipt', 'Receipt', 'T2', '2026-11-20', 'Test Customer', 'app', 'test-key-2') RETURNING id`);
   await refused("voucher that doesn't balance is refused",
-    "INSERT INTO voucher_entries (voucher_id, line, ledger, amount) VALUES ($1, 1, 'Cash', 1000), ($1, 2, 'Test Customer', -900)", [unb.rows[0].id]);
+    "INSERT INTO voucher_entries (voucher_id, line, ledger, amount) VALUES ($1, 1, 'Check Cash', 1000), ($1, 2, 'Check Customer', -900)", [unb.rows[0].id]);
   await refused("same entry key twice is refused (no duplicates)",
     "INSERT INTO vouchers (company_id, vtype, number, vdate, owner, entry_key) VALUES ('business', 'App Receipt', 'T3', '2026-11-20', 'app', 'test-key-1')");
   await refused("posted voucher can't be edited", "UPDATE vouchers SET party = 'Someone Else' WHERE id = $1", [vid]);
@@ -61,8 +61,8 @@ try {
   await c.query("INSERT INTO period_locks (company_id, month, reason) VALUES ('business', '2026-10-01', 'GST filed')");
   await refused("no new app voucher in a locked month",
     "INSERT INTO vouchers (company_id, vtype, number, vdate, owner, entry_key) VALUES ('business', 'App Receipt', 'T4', '2026-10-15', 'app', 'test-key-4')");
-  const tb = (await c.query("SELECT ledger, debit, credit FROM trial_balance WHERE company_id = 'business' ORDER BY ledger")).rows;
-  tb.length === 2 && tb[0].ledger === "Cash" && tb[0].debit === 1000 && tb[1].credit === 1000 ? ok("trial balance adds up") : bad("trial balance adds up", JSON.stringify(tb));
+  const tb = (await c.query("SELECT t.ledger, t.debit, t.credit FROM trial_balance t JOIN financial_years f ON f.id = t.fy_id WHERE t.company_id = 'business' AND t.ledger LIKE 'Check %' AND f.starts = '2026-04-01' ORDER BY t.ledger")).rows;
+  tb.length === 2 && tb[0].ledger === "Check Cash" && tb[0].debit === 1000 && tb[1].credit === 1000 ? ok("trial balance adds up") : bad("trial balance adds up", JSON.stringify(tb));
 } catch (e) {
   bad("check stopped", (e as Error).message);
 } finally {

@@ -4,13 +4,16 @@
   "private": true,
   "description": "Chittam Enterprises local server: one PostgreSQL database on the office PC",
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "migrate": "node src/migrate.ts",
     "start": "node src/index.ts",
     "check": "node src/check.ts"
   },
   "dependencies": {
+    "fast-xml-parser": "4.5.1",
     "pg": "8.13.1"
   },
   "devDependencies": {
