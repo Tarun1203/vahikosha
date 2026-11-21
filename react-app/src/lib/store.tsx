@@ -7,14 +7,16 @@ import * as local from "./local";
 
 // what the pages use of the signed-in user (Firebase or local server)
 export interface User { email: string | null; uid?: string }
-import { listenCollection, listenDoc, defaultSettings, type Customer, type Product, type Transport, type Settings, type Order, type ServiceJob, type Receipt, type BalanceSet } from "./data";
+import { isLocked, onCryptoChange, type CryptoConfig } from "./crypto";
+import { listenCollection, listenCrypto, listenDoc, defaultSettings, type Customer, type Product, type Transport, type Settings, type Order, type ServiceJob, type Receipt, type BalanceSet } from "./data";
 
 interface Store {
   user: User | null;
   authReady: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signOutUser: () => Promise<void>;
-  customers: Customer[];
+  customers: Customer[];      // active customers (not removed or merged)
+  allCustomers: Customer[];   // including removed and merged
   products: Product[];
   transports: Transport[];
   settings: Settings;
@@ -25,6 +27,9 @@ interface Store {
   balances: Record<string, BalanceSet>; // "business" / "cash" from Tally
   synced: boolean; // false while showing data saved on this device (offline)
   error: string;
+  crypto: CryptoConfig | null; // set when the data is encrypted
+  cryptoReady: boolean;        // settings/crypto has been read
+  locked: boolean;             // encrypted, and this device doesn't have the passphrase yet
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -43,6 +48,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [balances, setBalances] = useState<Record<string, BalanceSet>>({});
   const [synced, setSynced] = useState(false);
   const [error, setError] = useState("");
+  const [crypto, setCrypto] = useState<CryptoConfig | null>(null);
+  const [cryptoReady, setCryptoReady] = useState(false);
+  const [locked, setLocked] = useState(false);
+  useEffect(() => onCryptoChange(() => setLocked(isLocked())), []);
 
   useEffect(() => {
     // local development only (removed from the published build): ?demo shows
@@ -51,7 +60,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       import("./demo").then((d) => {
         setUser(d.demoUser); setCustomers(d.demoCustomers); setProducts(d.demoProducts); setTransports(d.demoTransports);
         setOrders(d.demoOrders); setServices(d.demoServices); setReceipts(d.demoReceipts); setBalances(d.demoBalances);
-        setSettingsLoaded(true); setSynced(true); setAuthReady(true);
+        setSettingsLoaded(true); setSynced(true); setAuthReady(true); setCryptoReady(true);
       });
       return;
     }
@@ -59,8 +68,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
   }, []);
 
+  // whether the data is encrypted: read before anything else
   useEffect(() => {
     if (!user || (import.meta.env.DEV && new URLSearchParams(location.search).has("demo"))) return;
+    return listenCrypto((c) => { setCrypto(c); setLocked(isLocked()); setCryptoReady(true); },
+      (e) => { setError(e.message); setCryptoReady(true); });
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !cryptoReady || locked || (import.meta.env.DEV && new URLSearchParams(location.search).has("demo"))) return;
+    setError("");
     const fail = (e: Error) => setError(e.message);
     const unsubs = [
       listenCollection<Customer>("customers", (items, fromCache) => { setCustomers(items); setSynced(!fromCache); }, fail),
@@ -77,14 +94,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       listenDoc<Settings>("settings", "main", (s) => { setSettings({ ...defaultSettings, ...(s || {}) }); setSettingsLoaded(true); }, fail),
     ];
     return () => unsubs.forEach((u) => u());
-  }, [user]);
+  }, [user, cryptoReady, locked]);
 
+  const active = customers.filter((c) => !c.removed && !c.mergedInto);
   const value: Store = {
     user,
     authReady,
     signIn: async (email, password) => { if (local.LOCAL) await local.signIn(email, password); else await signInWithEmailAndPassword(auth, email, password); },
     signOutUser: () => (local.LOCAL ? local.signOut() : signOut(auth)),
-    customers,
+    customers: active,
+    allCustomers: customers,
     products,
     transports,
     settings,
@@ -95,6 +114,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     balances,
     synced,
     error,
+    crypto,
+    cryptoReady,
+    locked,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

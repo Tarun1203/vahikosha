@@ -57,6 +57,7 @@ export function Orders() {
   const [pendingOpen, setPendingOpen] = useState(false);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
+  const [showDone, setShowDone] = useState(false);
 
   const sorted = useMemo(() => [...orders].sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.orderNo).localeCompare(String(a.orderNo))), [orders]);
   const counts = useMemo(() => {
@@ -71,6 +72,13 @@ export function Orders() {
     const f = q.trim().toLowerCase();
     return !f || [o.orderNo, o.customerName, o.notes, ...(o.items || []).map((i) => i.name)].join(" ").toLowerCase().includes(f);
   });
+
+  // without a status filter: open orders first, then delivered orders that still owe
+  // items (showing only those), and fully delivered / cancelled ones hidden behind a button
+  const isDone = (o: Order) => o.status === "Delivered" || o.status === "Cancelled";
+  const open = list.filter((o) => !isDone(o));
+  const deliveredPending = list.filter((o) => o.status === "Delivered" && orderPending(o).length > 0);
+  const done = list.filter((o) => isDone(o) && !(o.status === "Delivered" && orderPending(o).length > 0));
 
   if (editing) return <OrderEditor order={editing === "new" ? null : editing} onClose={() => setEditing(null)} />;
 
@@ -89,39 +97,70 @@ export function Orders() {
         </div>
       )}
       <div className="mb-5 flex flex-wrap gap-3">
-        <Text className="max-w-md flex-1" value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Search order no., customer or product…" />
+        <Text className="max-w-md min-w-[15rem] flex-1" value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Search order no., customer or product…" />
         <Select className="w-auto" value={status} onChange={setStatus} options={[{ value: "", label: "All statuses" }, ...ORDER_STATUSES.map((s) => ({ value: s, label: s }))]} />
       </div>
       {list.length === 0 ? (
         <EmptyState icon="file-text" title={sorted.length ? "No orders match" : "No orders yet"} text={sorted.length ? "Try another search or status." : "Press “New order” to take the first one."}
           action={!sorted.length && <Button onClick={() => setEditing("new")}><IconPlus size={16} /> New order</Button>} />
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {list.map((o, i) => (
-            <motion.button key={o.id} onClick={() => setEditing(o)} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 12) * 0.02 }}
-              className="rounded-2xl border border-neutral-200/80 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs font-bold text-brand-600 tabular-nums">{o.orderNo} · {msgDate(o.date)}</div>
-                  <div className="truncate text-[15px] font-bold">{o.customerName || "—"}</div>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <StatusBadge status={o.status || "Pending"} />
-                  {orderPending(o).length > 0 && o.status !== "Cancelled" && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700 ring-1 ring-amber-200">⏳ {orderPending(o).reduce((t, it) => t + pendingQty(it), 0)} pending</span>}
-                </div>
-              </div>
-              <div className="mt-2 line-clamp-2 text-xs text-neutral-500">{(o.items || []).map((it) => it.name + (it.qty ? " × " + it.qty : "")).join(", ")}</div>
-              <div className="mt-2 flex items-center justify-between text-sm">
-                <span className="text-neutral-500">{o.transport ? "🚛 " + o.transport : ""}</span>
-                <strong className="tabular-nums">{inr(o.total)}</strong>
-              </div>
-            </motion.button>
-          ))}
-        </div>
+        status ? (
+          <div className="grid gap-3 md:grid-cols-2">{list.map((o, i) => <OrderCard key={o.id} o={o} i={i} onOpen={() => setEditing(o)} />)}</div>
+        ) : (
+          <div className="space-y-6">
+            {open.length > 0
+              ? <div className="grid gap-3 md:grid-cols-2">{open.map((o, i) => <OrderCard key={o.id} o={o} i={i} onOpen={() => setEditing(o)} />)}</div>
+              : <p className="rounded-2xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-500">No open orders{q ? " match" : ""}.</p>}
+            {deliveredPending.length > 0 && (
+              <section>
+                <h2 className="mb-2 flex items-center gap-2 text-sm font-extrabold text-amber-800"><IconHourglass size={16} /> Delivered — items still pending ({deliveredPending.length})</h2>
+                <div className="grid gap-3 md:grid-cols-2">{deliveredPending.map((o, i) => <OrderCard key={o.id} o={o} i={i} pendingOnly onOpen={() => setEditing(o)} />)}</div>
+              </section>
+            )}
+            {done.length > 0 && (
+              <section>
+                <button onClick={() => setShowDone((v) => !v)} className="text-sm font-semibold text-brand-600 hover:underline">
+                  {showDone ? "Hide delivered & cancelled" : "Show delivered & cancelled (" + done.length + ")"}
+                </button>
+                {showDone && <div className="mt-3 grid gap-3 opacity-80 md:grid-cols-2">{done.map((o, i) => <OrderCard key={o.id} o={o} i={i} onOpen={() => setEditing(o)} />)}</div>}
+              </section>
+            )}
+          </div>
+        )
       )}
       <PickListDialog open={pickOpen} onClose={() => setPickOpen(false)} />
       <PendingDialog open={pendingOpen} onClose={() => setPendingOpen(false)} />
     </div>
+  );
+}
+
+function OrderCard({ o, i, onOpen, pendingOnly }: { o: Order; i: number; onOpen: () => void; pendingOnly?: boolean }) {
+  const pend = orderPending(o);
+  return (
+    <motion.button onClick={onOpen} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 12) * 0.02 }}
+      className={cn("rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md", pendingOnly ? "border-amber-200 hover:border-amber-300" : "border-neutral-200/80 hover:border-brand-200")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-bold text-brand-600 tabular-nums">{o.orderNo} · {msgDate(o.date)}</div>
+          <div className="truncate text-[15px] font-bold">{o.customerName || "—"}</div>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <StatusBadge status={o.status || "Pending"} />
+          {pend.length > 0 && o.status !== "Cancelled" && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700 ring-1 ring-amber-200">⏳ {pend.reduce((t, it) => t + pendingQty(it), 0)} pending</span>}
+        </div>
+      </div>
+      {pendingOnly ? (
+        <ul className="mt-2 space-y-0.5 text-sm">
+          {pend.map((it, k) => <li key={k} className="flex justify-between gap-3"><span className="min-w-0 truncate">{it.name}</span><span className="shrink-0 font-semibold tabular-nums text-amber-800">{pendingQty(it)} pending</span></li>)}
+        </ul>
+      ) : (
+        <div className="mt-2 line-clamp-2 text-xs text-neutral-500">{(o.items || []).map((it) => it.name + (it.qty ? " × " + it.qty : "")).join(", ")}</div>
+      )}
+      <div className="mt-2 flex items-center justify-between text-sm">
+        <span className="text-neutral-500">{o.transport ? "🚛 " + o.transport : ""}</span>
+        {!pendingOnly && <strong className="tabular-nums">{inr(o.total)}</strong>}
+      </div>
+    </motion.button>
   );
 }
 
@@ -146,7 +185,7 @@ function StockLine({ row, onChange, stock }: { row: Row; onChange: (avail: strin
         : <button type="button" onClick={() => onChange("")} className="rounded-lg px-2 py-1 font-semibold text-brand-600 hover:bg-brand-50">All available</button>}
       {stock && (
         <span className={cn("ml-auto rounded-full px-2 py-0.5 font-semibold", stock.total <= 0 ? "bg-rose-50 text-rose-700" : stock.total < qty ? "bg-amber-50 text-amber-700" : "bg-neutral-100 text-neutral-600")}
-          title={"Chittam: " + (stock.business ?? "—") + " · Cash: " + (stock.cash ?? "—")}>
+          title={Object.entries(stock.per || {}).map(([k, q]) => (k === "business" ? "Chittam" : k === "cash" ? "Cash" : k) + ": " + q).join(" · ")}>
           Tally stock {stock.total} {stock.unit}
         </span>
       )}
@@ -333,8 +372,8 @@ function OrderEditor({ order, onClose }: { order: Order | null; onClose: () => v
             ))}
             <TotalLine strong label="Order total" value={inr(total)} />
             <TallyFreshness what="Tally stock figures" />
-            {tallyStock && (tallyStock.business || tallyStock.cash) && (
-              <p className="text-xs text-neutral-400">Tally stock (Chittam + Cash) as of {syncedWhen(tallyStock.business?.syncedAt || tallyStock.cash?.syncedAt)} — “Available now” fills in from it; change it if needed.</p>
+            {tallyStock && Object.keys(tallyStock).length > 0 && (
+              <p className="text-xs text-neutral-400">Tally stock (all companies added up) as of {syncedWhen(Object.values(tallyStock).map((x) => x?.syncedAt).find(Boolean))} — “Available now” fills in from it; change it if needed.</p>
             )}
             {pendingLines.length > 0 && <>
               <TotalLine label="To pack now" value={inr(packValue)} />

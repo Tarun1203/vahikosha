@@ -4,6 +4,73 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.29", date: "2026-11-21", title: "Ledger Statement shows every company it checked",
+    items: [
+      "Under the customer, Ledger Statement now lists every Tally company (Chittam Enterprises, Cash, Vamana Enterprises…) marked “included” or “no account”.",
+      "A company is in the statement when the customer has a Tally balance or transactions there; otherwise it shows “no account”, so you can see it was checked.",
+    ],
+  },
+  {
+    version: "3.28", date: "2026-11-20", title: "Added Tally companies show in Settings",
+    items: [
+      "Settings → Tally balances now lists every company synced from Tally (for example Vamana Enterprises), with when it was synced and how many customers it has — not just Chittam Enterprises and Cash.",
+      "The Tally stock note on Orders now says it adds up all companies.",
+    ],
+  },
+  {
+    version: "3.27", date: "2026-11-20", title: "Encryption: the data in Firebase scrambled with your own passphrase", windows: "3.4",
+    items: [
+      "Settings → Encryption → Turn on encryption…: choose a passphrase for the team. Every record (customers, products, orders, payments, Tally balances and transactions, settings) is then stored scrambled, so not even Google can read it.",
+      "Each phone, browser and the Windows app asks for the passphrase once. The old app works with it too.",
+      "If the passphrase is forgotten on every device, the data can't be recovered — write it down.",
+      "Windows app 3.4: Tally Sync → Passphrase… to enter it on the Tally PC. Until then the sync waits.",
+      "History and saved messages from before encryption stay as they were; new ones are encrypted.",
+    ],
+  },
+  {
+    version: "3.26", date: "2026-11-20", title: "More Tally companies, and a “sync from” date per company", windows: "3.3",
+    items: [
+      "Windows app → Tally Sync → Companies…: add more Tally companies — give each a name (how the app shows it) and pick its Tally company. Each is synced like Chittam Enterprises and Cash: balances, open bills, transactions and stock.",
+      "Every company can have its own “Sync from” date for transactions (blank = from 1 April).",
+      "The added companies appear everywhere: customer balances, Payment Updated (its own previous balance and amount received), Payments Received, Balance Confirmation, Payment Reminder, Ledger Statement and PDF, Tally Match (filter, balances, Record) and Post to Tally.",
+      "Messages read exactly as before when only Chittam Enterprises and Cash are used; an added company's lines appear only when it has a balance or amount.",
+    ],
+  },
+  {
+    version: "3.25", date: "2026-11-20", title: "Orders: open, delivered-with-pending and delivered in separate sections",
+    items: [
+      "Orders now shows open orders first.",
+      "Delivered orders that still owe items get their own section, “Delivered — items still pending”, listing only the items still to be sent.",
+      "Fully delivered and cancelled orders are hidden behind “Show delivered & cancelled”. Picking a status in the filter still shows just that status.",
+    ],
+  },
+  {
+    version: "3.24", date: "2026-11-20", title: "Post to Tally: choose Chittam Enterprises or Cash",
+    items: [
+      "Post to Tally now lets you pick the company — Chittam Enterprises or Cash. The customer's Tally ledger, their open bills and the cash / bank ledgers all switch to that company.",
+      "Posting into the other company than the one the payment was entered under? A tick box (on by default) also moves the payment to that company in the app — only after Tally confirms the voucher — so Tally Match agrees. The move is noted on the payment and kept in History.",
+    ],
+  },
+  {
+    version: "3.23", date: "2026-11-20", title: "Phone layout fixes",
+    items: [
+      "Lists of cards (customers, orders, service jobs, Tally Match…) no longer run past the phone's edge when a name is long — long names end with “…” instead.",
+      "Pop-up windows: the buttons at the bottom (Remove, Ledger statement, Cancel, Save…) no longer squash or get cut off — they move to a second line on small phones.",
+      "Date boxes side by side (From / To, mode / date) stack one under the other on narrow phones, so the whole date shows.",
+      "Orders and Service Jobs: the search box gets the full width on phones, with the status filter below it.",
+      "Tally Match: all four tabs (Payments, Duplicates, Sales & returns, Balances) are visible on phones instead of hiding off to the right.",
+    ],
+  },
+  {
+    version: "3.22", date: "2026-11-20", title: "Find and merge duplicate customers; remove customers",
+    items: [
+      "Customers → Possible duplicates: finds customers saved twice — the same name written differently, a small spelling slip, or the same mobile number — and shows each one's orders, service jobs, payments and whether it's in Tally.",
+      "Pick the one to keep and Merge: the others' orders, service jobs and payments move to it, and the others are kept as “merged” (nothing is deleted). Messages already sent stay as they were. “Not duplicates” stops a pair being suggested again.",
+      "Remove a customer (edit → Remove): hidden from every list and picker but kept, and restorable under “Show removed & merged”.",
+      "Ledger PDF: the Grand Total line now sits inside the balance summary box.",
+    ],
+  },
+  {
     version: "3.21", date: "2026-11-20", title: "App receipts stand out in Tally's Day Book", windows: "3.2",
     items: [
       "Post to Tally now creates the voucher as type “App Receipt” (under Receipt), so receipts entered from the app show in their own Vch Type column in Tally's Day Book and can be filtered.",

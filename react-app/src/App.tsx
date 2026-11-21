@@ -4,7 +4,7 @@ import { StoreProvider, useStore } from "@/lib/store";
 import { ToastProvider, Icon3D } from "@/components/kit";
 import { AppShell } from "@/components/AppShell";
 import { UpdateBar } from "@/lib/pwa";
-import { Login } from "@/pages/Login";
+import { Login, Unlock } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Customers } from "@/pages/Customers";
 import { Products } from "@/pages/Products";
@@ -24,8 +24,8 @@ import { Ledger } from "@/pages/Ledger";
 const ExportFirebase = import.meta.env.DEV ? lazy(() => import("@/pages/ExportFirebase")) : null;
 
 function Gate() {
-  const { user, authReady } = useStore();
-  if (!authReady) {
+  const { user, authReady, cryptoReady, locked } = useStore();
+  if (!authReady || (user && !cryptoReady)) {
     return (
       <div className="flex h-full items-center justify-center">
         <Icon3D name="star" className="h-16 w-16 animate-float drop-shadow-xl" />
@@ -33,6 +33,7 @@ function Gate() {
     );
   }
   if (!user) return <Login />;
+  if (locked) return <Unlock />;
   return (
     <AppShell>
       <Routes>

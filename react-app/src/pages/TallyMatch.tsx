@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { Chip } from "./ReceiptsReport";
 import { TallyFreshness } from "@/components/TallyFreshness";
 import { billsOf, useTallyBills } from "@/lib/tallydata";
+import { amountOf, companyIcon, receiptTotal, useCompanies, withAmount } from "@/lib/companies";
 
 
 const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
@@ -34,7 +35,8 @@ export function TallyMatch() {
   const [to, setTo] = useState(todayISO());
   const [account, setAccount] = useState<"" | Account>("");
   const biz = settings.businessName || "Chittam Enterprises";
-  const accLabel = (a: Account) => (a === "business" ? biz : "Cash");
+  const companies = useCompanies();
+  const accLabel = (a: Account) => companies.find((c) => c.key === a)?.label || (a === "business" ? biz : a === "cash" ? "Cash" : a);
 
   async function load() {
     setError("");
@@ -76,10 +78,10 @@ export function TallyMatch() {
 
       {inDesktopApp() && <DesktopSyncCard />}
       <TallyFreshness className="mb-3" />
-      <SyncInfo sets={sets} accLabel={accLabel} balancesAt={[balances.business?.importedAt, balances.cash?.importedAt]} />
+      <SyncInfo sets={sets} accLabel={accLabel} keys={companies.map((c) => c.key)} balancesAt={companies.map((c) => balances[c.key]?.importedAt)} />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="no-scrollbar flex max-w-full gap-1 overflow-x-auto rounded-xl bg-neutral-200/60 p-1">
+        <div className="flex max-w-full flex-wrap gap-1 rounded-xl bg-neutral-200/60 p-1">
           {([["payments", "Payments"], ["duplicates", "Duplicates" + (dupCount ? " (" + dupCount + ")" : "")], ["sales", "Sales & returns"], ["balances", "Balances"]] as const).map(([v, l]) => (
             <button key={v} onClick={() => setTab(v)} className={cn("rounded-lg px-3.5 py-1.5 text-sm font-semibold whitespace-nowrap", tab === v ? "bg-white shadow-sm" : "text-neutral-500")}>{l}</button>
           ))}
@@ -90,7 +92,7 @@ export function TallyMatch() {
         <Card className="mb-4 grid gap-3 sm:grid-cols-3">
           <Field label="From"><Text type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
           <Field label="To"><Text type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
-          <Field label="Account"><Select value={account} onChange={(v) => setAccount(v as "" | Account)} options={[{ value: "", label: "Both accounts" }, { value: "business", label: biz }, { value: "cash", label: "Cash" }]} /></Field>
+          <Field label="Account"><Select value={account} onChange={(v) => setAccount(v as "" | Account)} options={[{ value: "", label: companies.length > 2 ? "All companies" : "Both accounts" }, ...companies.map((c) => ({ value: c.key, label: c.label }))]} /></Field>
         </Card>
       )}
 
@@ -137,9 +139,9 @@ function DesktopSyncCard() {
   );
 }
 
-function SyncInfo({ sets, accLabel, balancesAt }: { sets: Record<string, TallyVoucherSet> | null; accLabel: (a: Account) => string; balancesAt: (string | undefined)[] }) {
+function SyncInfo({ sets, accLabel, keys, balancesAt }: { sets: Record<string, TallyVoucherSet> | null; accLabel: (a: Account) => string; keys: string[]; balancesAt: (string | undefined)[] }) {
   if (!sets) return null;
-  const parts = (["business", "cash"] as Account[]).map((a, i) => {
+  const parts = keys.map((a, i) => {
     const s = sets[a];
     return accLabel(a) + ": " + (s?.syncedAt ? s.count + " transactions " + msgDate(s.from) + " – " + msgDate(s.to) + " (sent " + when(s.syncedAt) + ")" : "no transactions") +
       (balancesAt[i] ? " · balances " + when(balancesAt[i]) : "");
@@ -296,10 +298,10 @@ function RecordDialog({ entry, onClose, accLabel, modes, cashMode, bankMode }: {
     if (!customer) { toast("Pick the customer first."); return; }
     const rec: Receipt = {
       id: "rc_" + uid().slice(2), date: entry.d, customerId: customer.id, customerName: customer.name, mode,
-      business: entry.account === "business" ? entry.a : 0, cash: entry.account === "cash" ? entry.a : 0,
+      business: 0, cash: 0,
       source: "Tally", ref: entry.n || "", note: note.trim(), cancelled: false, tallyNo: entry.n || "", tallyId: entry.id || "",
     };
-    try { await saveRecord("receipts", rec, null); toast("Recorded in Payments Received and linked to Tally #" + (entry.n || "") + "."); onClose(); }
+    try { await saveRecord("receipts", withAmount(rec, entry.account, entry.a), null); toast("Recorded in Payments Received and linked to Tally #" + (entry.n || "") + "."); onClose(); }
     catch (e) { toast("Could not save: " + (e as Error).message); }
   }
   return (
@@ -325,6 +327,7 @@ function RecordDialog({ entry, onClose, accLabel, modes, cashMode, bankMode }: {
 // The Windows app shows its own confirmation with the whole voucher before creating it.
 function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null; onClose: () => void; accLabel: (a: Account) => string }) {
   const { balances, receipts } = useStore();
+  const companies = useCompanies();
   const toast = useToast();
   const [ledgers, setLedgers] = useState<string[] | null>(null);
   const [banks, setBanks] = useState<string[]>([]);
@@ -338,10 +341,16 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
   const [narration, setNarration] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // which Tally company to post into: where the payment was entered, or the other one
+  const [co, setCo] = useState<Account>("business");
+  // when posting into the other company, also move the payment there in the app (so Tally Match agrees)
+  const [moveInApp, setMoveInApp] = useState(true);
   const receipt = payment ? receipts.find((x) => x.id === payment.receiptId) : undefined;
-  // the customer's ledger as spelled in Tally (from the balance sync)
-  const tallyName = payment ? balances[payment.account]?.names?.[normalizeName(payment.name)] || "" : "";
-  const openBills = useMemo(() => (payment ? billsOf(tallyBills, payment.account, tallyName || payment.name) : []), [payment, tallyBills, tallyName]);
+  // the customer's ledger as spelled in Tally (from the balance sync), in the chosen company
+  const tallyName = !payment ? "" : balances[co]?.names?.[normalizeName(payment.name)]
+    || (balances[co]?.balances?.[normalizeName(payment.name)] !== undefined ? payment.name : "");
+  const openBills = useMemo(() => (payment ? billsOf(tallyBills, co, tallyName || payment.name) : []), [payment, co, tallyBills, tallyName]);
+  const otherCo = !!payment && co !== payment.account;
   const num = (v: string) => Math.max(0, Number(v) || 0);
   const against = Math.round(openBills.reduce((t, b) => t + num(adj[b.n] || ""), 0) * 100) / 100;
   const onAccount = payment ? Math.round((payment.amount - against) * 100) / 100 : 0;
@@ -363,11 +372,18 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
     setTxn({ type: /cheque|dd|draft/i.test(m) ? "Cheque" : /upi|neft|rtgs|imps|transfer|gpay|phone\s*pe|paytm|online/i.test(m) ? "e-Fund Transfer" : "Others",
       number: receipt?.txnRef || "", date: payment.date, bank: "" });
     setRest({ type: "On Account", ref: "" });
-    desktopPost({ type: "tally-cashbank", key: payment.account });
+    setCo(payment.account);
+    setMoveInApp(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payment]);
+  // the chosen company's cash / bank ledgers
+  useEffect(() => {
+    if (!payment) return;
+    setLedgers(null); setBanks([]); setInto("");   // the bills refill themselves (oldest first) when the company changes
+    desktopPost({ type: "tally-cashbank", key: co });
+  }, [payment, co]);
   useDesktopReply<{ key: string; ledgers: string[]; banks?: string[]; error?: string }>("tally-cashbank", (d) => {
-    if (!payment || d.key !== payment.account) return;
+    if (!payment || d.key !== co) return;
     setLedgers(d.ledgers || []);
     setBanks(d.banks || []);
     if (d.error) setErr("Couldn't read Tally's cash / bank ledgers: " + d.error);
@@ -379,8 +395,17 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
   useDesktopReply<{ receiptId: string; ok: boolean; error: string }>("tally-post-result", (d) => {
     if (!payment || d.receiptId !== payment.receiptId) return;
     setBusy(false);
-    if (d.ok) { toast("Posted to Tally. It shows as matched after the sync finishes (a few seconds)."); onClose(); }
-    else if (d.error !== "Not posted.") setErr(d.error);
+    if (!d.ok) { if (d.error !== "Not posted.") setErr(d.error); return; }
+    // posted into the other company: move the amount there in the app too, only now that Tally has it
+    if (otherCo && moveInApp && receipt) {
+      const from = payment.account, amt = payment.amount;
+      const moved = withAmount(withAmount(receipt, from, Math.max(0, amountOf(receipt, from) - amt)), co, amountOf(receipt, co) + amt);
+      const next = { ...moved, note: ((receipt.note ? receipt.note + " · " : "") + "moved to " + accLabel(co) + " when posted to Tally").slice(0, 200) };
+      saveRecord("receipts", next, receipt)
+        .then(() => toast("Posted to " + accLabel(co) + " in Tally, and moved there in the app."))
+        .catch((e) => toast("Posted to Tally, but the app's payment couldn't be moved: " + (e as Error).message));
+    } else toast("Posted to Tally. It shows as matched after the sync finishes (a few seconds).");
+    onClose();
   });
   const tooMuch = onAccount < -0.004;
   const needsRef = onAccount > 0.004 && rest.type !== "On Account";
@@ -389,7 +414,7 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
     if (!payment || !tallyName || !into || tooMuch) return;
     setBusy(true); setErr("");
     const bills = openBills.filter((b) => num(adj[b.n] || "") > 0).map((b) => ({ ref: b.n, amount: num(adj[b.n] || "") }));
-    desktopPost({ type: "tally-post-receipt", key: payment.account, date: payment.date, party: tallyName, into, amount: payment.amount, narration, receiptId: payment.receiptId,
+    desktopPost({ type: "tally-post-receipt", key: co, date: payment.date, party: tallyName, into, amount: payment.amount, narration, receiptId: payment.receiptId,
       bills, rest: onAccount > 0.004 ? { type: rest.type, ref: rest.type === "On Account" ? "" : restRef } : undefined, bank: isBank ? { type: txn.type, number: txn.number.trim(), date: txn.date || payment.date, bank: txn.bank.trim() } : undefined });
   }
   return (
@@ -401,12 +426,26 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
           <div className="text-xs text-neutral-500">{appSub(payment, accLabel)}</div>
         </div>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-          <dt className="text-neutral-500">Company</dt><dd className="font-semibold">{accLabel(payment.account)}</dd>
+          <dt className="self-center text-neutral-500">Company</dt>
+          <dd>
+            <div className="inline-flex flex-wrap gap-1 rounded-xl bg-neutral-200/60 p-1">
+              {companies.map((c) => c.key).map((a) => (
+                <button key={a} type="button" onClick={() => setCo(a)} disabled={busy}
+                  className={cn("rounded-lg px-3 py-1.5 text-sm font-semibold whitespace-nowrap", co === a ? "bg-white shadow-sm" : "text-neutral-500")}>{accLabel(a)}</button>
+              ))}
+            </div>
+          </dd>
           <dt className="text-neutral-500">Voucher</dt><dd className="font-semibold">App Receipt · {msgDate(payment.date)}</dd>
           <dt className="text-neutral-500">Received from</dt>
           <dd className="font-semibold">{tallyName || <span className="text-rose-600">No ledger named “{payment.name}” in Tally — create it in Tally (or fix the spelling) first.</span>}</dd>
           <dt className="text-neutral-500">Amount</dt><dd className="font-semibold">{inr(payment.amount)}</dd>
         </dl>
+        {otherCo && (
+          <label className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+            <input type="checkbox" className="mt-0.5 size-4 accent-brand-600" checked={moveInApp} onChange={(e) => setMoveInApp(e.target.checked)} />
+            <span>This payment is entered under <b>{accLabel(payment.account)}</b> in the app. After Tally confirms, also move its {inr(payment.amount)} to <b>{accLabel(co)}</b> in the app, so Tally Match agrees.</span>
+          </label>
+        )}
         <Field label="Received into (Tally ledger)">
           {ledgers === null ? <p className="text-sm text-neutral-500">Reading Tally's cash and bank ledgers…</p>
             : <Select value={into} onChange={setInto} options={ledgers.length ? ledgers : [{ value: "", label: "No cash / bank ledgers found" }]} />}
@@ -565,7 +604,7 @@ function DuplicatesView({ tally, app, accLabel }: { tally: ReturnType<typeof tal
         <Card key={"a" + i} className="p-0">
           <div className="flex items-center gap-2 border-b border-neutral-100 px-4 py-2.5 text-sm font-bold"><IconAlertTriangle size={16} className="text-amber-500" /> In the app (Payments Received) · {g.why}</div>
           <div className="divide-y divide-neutral-100">{g.items.map((r: Receipt) => (
-            <Row key={r.id} tone="warn" left={r.customerName} right={inr((Number(r.business) || 0) + (Number(r.cash) || 0))}
+            <Row key={r.id} tone="warn" left={r.customerName} right={inr(receiptTotal(r))}
               sub={msgDate(r.date) + " · " + r.mode + " · " + r.source + (r.ref ? " " + r.ref : "") + (r.note ? " · " + r.note : "") + " — cancel the extra one on Payment Updated → Payments Received"} />
           ))}</div>
         </Card>
@@ -580,21 +619,23 @@ function BalancesView() {
   const toast = useToast();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "owes" | "missing">("all");
-  const biz = settings.businessName || "Chittam Enterprises";
-  const bmap = balances.business?.balances || {}, cmap = balances.cash?.balances || {};
-  const names = { ...(balances.cash?.names || {}), ...(balances.business?.names || {}) };
+  const companies = useCompanies();
+  const maps = useMemo(() => companies.map((co) => balances[co.key]?.balances || {}), [companies, balances]);
+  const names = useMemo(() => Object.assign({}, ...companies.map((co) => balances[co.key]?.names || {}).reverse()) as Record<string, string>, [companies, balances]);
 
   const rows = useMemo(() => customers.map((c) => {
     const k = normalizeName(c.name);
-    const b = bmap[k], cash = cmap[k];
-    return { c, b, cash, total: (b || 0) + (cash || 0), inTally: b !== undefined || cash !== undefined };
-  }), [customers, bmap, cmap]);
+    const per = maps.map((m) => m[k]);
+    return { c, per, total: per.reduce((t: number, v) => t + (v || 0), 0), inTally: per.some((v) => v !== undefined) };
+  }), [customers, maps]);
   const customerKeys = useMemo(() => new Set(customers.map((c) => normalizeName(c.name))), [customers]);
-  const tallyOnly = useMemo(() => Object.keys({ ...bmap, ...cmap }).filter((k) => !customerKeys.has(k)).map((k) => ({ k, name: names[k] || k, total: (bmap[k] || 0) + (cmap[k] || 0) }))
-    .sort((a, b) => b.total - a.total), [bmap, cmap, customerKeys, names]);
+  const tallyOnly = useMemo(() => [...new Set(maps.flatMap((m) => Object.keys(m)))].filter((k) => !customerKeys.has(k))
+    .map((k) => ({ k, name: names[k] || k, total: maps.reduce((t, m) => t + (m[k] || 0), 0) }))
+    .sort((a, b) => b.total - a.total), [maps, customerKeys, names]);
   const shown = rows.filter((r) => (filter === "all" || (filter === "owes" ? r.total > 0 : !r.inTally)) && (!q.trim() || r.c.name.toLowerCase().includes(q.trim().toLowerCase())))
     .sort((a, b) => b.total - a.total || a.c.name.localeCompare(b.c.name));
-  const sums = rows.reduce((t, r) => ({ b: t.b + (r.b || 0), c: t.c + (r.cash || 0) }), { b: 0, c: 0 });
+  const sums = companies.map((_, i) => rows.reduce((t, r) => t + (r.per[i] || 0), 0));
+  const cols = { gridTemplateColumns: "minmax(0,1fr) " + companies.map(() => "auto").join(" ") + " auto" };
   const missing = rows.filter((r) => !r.inTally).length;
 
   async function addCustomer(name: string) {
@@ -602,14 +643,13 @@ function BalancesView() {
     catch (e) { toast("Could not add: " + (e as Error).message); }
   }
 
-  if (!balances.business && !balances.cash) return <EmptyState icon="star" title="No Tally balances yet" text="They come from the Windows app's Tally Sync, or from Settings → Tally balances → Import file." />;
+  if (!companies.some((co) => balances[co.key])) return <EmptyState icon="star" title="No Tally balances yet" text="They come from the Windows app's Tally Sync, or from Settings → Tally balances → Import file." />;
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
       <div>
         <div className="mb-3 flex flex-wrap gap-2">
-          <Chip strong label="Total receivable" value={inr(Math.round(sums.b + sums.c))} />
-          <Chip label={biz} value={inr(Math.round(sums.b))} />
-          <Chip label="Cash" value={inr(Math.round(sums.c))} />
+          <Chip strong label="Total receivable" value={inr(Math.round(sums.reduce((t, v) => t + v, 0)))} />
+          {companies.map((co, i) => <Chip key={co.key} label={co.label} value={inr(Math.round(sums[i]))} />)}
           <Chip label="Customers not in Tally" value={String(missing)} />
         </div>
         <div className="mb-3 flex flex-wrap gap-2">
@@ -617,15 +657,16 @@ function BalancesView() {
           <Select className="w-auto" value={filter} onChange={(v) => setFilter(v as typeof filter)} options={[{ value: "all", label: "All customers" }, { value: "owes", label: "Owes money" }, { value: "missing", label: "Not found in Tally" }]} />
         </div>
         <Card className="p-0">
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 border-b border-neutral-100 px-4 py-2 text-[11px] font-bold tracking-wide text-neutral-500 uppercase">
-            <span>Customer</span><span className="w-20 text-right sm:w-24">{biz.split(" ")[0]}</span><span className="w-20 text-right sm:w-24">Cash</span><span className="w-20 text-right sm:w-24">Total</span>
+          <div style={cols} className="grid gap-x-4 border-b border-neutral-100 px-4 py-2 text-[11px] font-bold tracking-wide text-neutral-500 uppercase">
+            <span>Customer</span>
+            {companies.map((co) => <span key={co.key} className="w-20 truncate text-right sm:w-24" title={co.label}>{co.label.split(" ")[0]}</span>)}
+            <span className="w-20 text-right sm:w-24">Total</span>
           </div>
           <div className="max-h-[60vh] divide-y divide-neutral-100 overflow-y-auto">
             {shown.map((r, i) => (
-              <motion.div key={r.c.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(i, 20) * 0.01 }} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-4 px-4 py-2.5 text-sm">
+              <motion.div key={r.c.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(i, 20) * 0.01 }} style={cols} className="grid items-center gap-x-4 px-4 py-2.5 text-sm">
                 <span className="min-w-0 truncate font-semibold">{r.inTally ? <a href={"#/ledger?c=" + r.c.id} className="hover:text-brand-700 hover:underline" title="Ledger statement">{r.c.name}</a> : r.c.name}{!r.inTally && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">not in Tally</span>}</span>
-                <span className="w-20 text-right tabular-nums sm:w-24">{r.b === undefined ? "—" : inr(r.b)}</span>
-                <span className="w-20 text-right tabular-nums sm:w-24">{r.cash === undefined ? "—" : inr(r.cash)}</span>
+                {r.per.map((v, k) => <span key={k} className="w-20 text-right tabular-nums sm:w-24">{v === undefined ? "—" : inr(v)}</span>)}
                 <span className={cn("w-20 text-right font-bold tabular-nums sm:w-24", r.total < 0 && "text-emerald-700")}>{r.inTally ? inr(r.total) : "—"}</span>
               </motion.div>
             ))}

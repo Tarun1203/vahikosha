@@ -3,12 +3,14 @@
 //   - nothing is ever deleted (there is no delete function here, and the
 //     database rules refuse deletes);
 //   - every add / edit also writes an entry to the activity log (History).
-import { collection, doc, onSnapshot, serverTimestamp, writeBatch, addDoc, getDocs, query, orderBy, limit, setDoc, type DocumentData, type Timestamp } from "firebase/firestore";
+import { collection, doc, onSnapshot, serverTimestamp, writeBatch, addDoc, getDocs, query, orderBy, limit, setDoc, runTransaction, type DocumentData, type Timestamp } from "firebase/firestore";
 import { db, auth } from "./firebase";
 import * as local from "./local";
 const LOCAL = local.LOCAL;
+import { newConfig, openDoc, sealDoc, setCryptoConfig, type CryptoConfig } from "./crypto";
 
-export interface Customer { id: string; name: string; mobile?: string }
+// removed: hidden from lists (kept, never deleted); mergedInto: the customer it was merged into
+export interface Customer { id: string; name: string; mobile?: string; removed?: boolean; removedAt?: string; mergedInto?: string; mergedAt?: string }
 export interface Product { id: string; name: string; category?: string; price?: number }
 export interface Transport { id: string; name: string; contactPerson?: string; phone?: string; branch?: string }
 export interface Settings {
@@ -17,6 +19,7 @@ export interface Settings {
   upiList: { upiId: string; payeeName?: string; isDefault?: boolean }[];
   bankList: { label?: string; accountNo: string; ifsc?: string; bankBranch?: string; isDefault?: boolean }[];
   paymentModes: string[];
+  notDuplicates?: string[];   // customer pairs marked "not duplicates" ("idA|idB")
 }
 
 // avail: how many can be packed now (no stock for the rest, which stays pending in
@@ -44,6 +47,7 @@ export interface Receipt {
   tallyNo?: string; tallyId?: string;   // the Tally voucher this payment is linked to
   receivedBy?: string;   // cash: who collected it
   txnRef?: string;       // other modes: transaction ID / UTR / cheque no.
+  extra?: Record<string, number>;   // amounts for companies beyond Chittam Enterprises and Cash (by company key)
 }
 export interface BalanceSet {
   company: string; label?: string; file?: string; importedAt?: string; importedBy?: string;
@@ -94,19 +98,43 @@ export function normalizeName(s: string | undefined) {
 
 /* ---------------- reading (live) ---------------- */
 
+// records are opened (decrypted) before they reach the page; a slower, older
+// update never replaces a newer one
 export function listenCollection<T>(name: string, cb: (items: T[], fromCache: boolean) => void, onError?: (e: Error) => void) {
   if (LOCAL) return local.listenCollection<T>(name, cb, onError);
+  let seq = 0;
   return onSnapshot(
     collection(db, name),
     { includeMetadataChanges: true },
-    (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...strip(d.data()) }) as T), snap.metadata.fromCache),
+    (snap) => {
+      const mine = ++seq;
+      Promise.all(snap.docs.map(async (d) => ({ id: d.id, ...strip(await openDoc(d.data(), name + "/" + d.id)) }) as T))
+        .then((items) => { if (mine === seq) cb(items, snap.metadata.fromCache); })
+        .catch((e) => onError?.(e));
+    },
     onError,
   );
 }
 
 export function listenDoc<T>(path: string, id: string, cb: (data: T | null) => void, onError?: (e: Error) => void) {
   if (LOCAL) return local.listenDoc<T>(path, id, cb, onError);
-  return onSnapshot(doc(db, path, id), (d) => cb(d.exists() ? (strip(d.data()) as T) : null), onError);
+  let seq = 0;
+  return onSnapshot(doc(db, path, id), (d) => {
+    const mine = ++seq;
+    (d.exists() ? openDoc(d.data(), path + "/" + id).then((x) => strip(x) as T) : Promise.resolve(null))
+      .then((x) => { if (mine === seq) cb(x); })
+      .catch((e) => onError?.(e));
+  }, onError);
+}
+
+// settings/crypto: whether the data is encrypted (and the check for the passphrase); readable, never encrypted
+export function listenCrypto(cb: (c: CryptoConfig | null) => void, onError?: (e: Error) => void) {
+  // the office PC server: the link to it is private (Tailscale), records are not encrypted here
+  if (LOCAL) { setCryptoConfig(null).then(() => cb(null)); return () => {}; }
+  return onSnapshot(doc(db, "settings", "crypto"), (d) => {
+    const c = d.exists() ? (d.data() as CryptoConfig) : null;
+    setCryptoConfig(c).then(() => cb(c && c.on ? c : null));
+  }, onError);
 }
 
 /* ---------------- writing (with the activity log) ---------------- */
@@ -135,8 +163,8 @@ export async function saveRecords(writes: Write[]) {
       const isNew = !w.before;
       const record: DocumentData = { ...data, updatedAt: serverTimestamp(), updatedBy: by };
       if (isNew) Object.assign(record, { createdAt: serverTimestamp(), createdBy: by });
-      batch.set(doc(db, w.coll, w.id), record, { merge: w.coll !== "settings" });
-      batch.set(doc(collection(db, "activity")), {
+      batch.set(doc(db, w.coll, w.id), await sealDoc(w.coll, record), { merge: w.coll !== "settings" });
+      batch.set(doc(collection(db, "activity")), await sealDoc("activity", {
         collection: w.coll,
         docId: w.id,
         action: isNew ? "create" : "update",
@@ -145,7 +173,7 @@ export async function saveRecords(writes: Write[]) {
         after: data,
         at: serverTimestamp(),
         by,
-      });
+      }));
     }
     await batch.commit();
   }
@@ -169,14 +197,14 @@ export async function logEvent(action: string, details: Record<string, unknown> 
   const user = auth.currentUser;
   if (!user) return;
   const d = stable(details) as Record<string, unknown>;
-  await addDoc(collection(db, "activity"), {
+  await addDoc(collection(db, "activity"), await sealDoc("activity", {
     collection: "app",
     action,
     name: (d.name as string) || (d.customerName as string) || "",
     details: d,
     at: serverTimestamp(),
     by: user.email || "",
-  });
+  }));
 }
 
 // every generated message is kept (text + the form's fields) and logged;
@@ -196,11 +224,11 @@ export async function logMessage(type: string, customer: Customer | null, text: 
   const who = { customerId: customer?.id || "", customerName: customer?.name || "", mobile: customer?.mobile || "" };
   const batch = writeBatch(db);
   const msgRef = doc(collection(db, "messages"));
-  batch.set(msgRef, { type, text, inputs: stable(inputs), ...who, at: serverTimestamp(), by: user.email || "" });
-  batch.set(doc(collection(db, "activity")), {
+  batch.set(msgRef, await sealDoc("messages", { type, text, inputs: stable(inputs), ...who, at: serverTimestamp(), by: user.email || "" }));
+  batch.set(doc(collection(db, "activity")), await sealDoc("activity", {
     collection: "app", action: "message-generated", name: who.customerName,
     details: { type, messageId: msgRef.id, ...who }, at: serverTimestamp(), by: user.email || "",
-  });
+  }));
   await batch.commit();
 }
 
@@ -218,16 +246,17 @@ export interface MessageEntry {
 export async function loadLatest<T>(coll: "activity" | "messages", count = 300) {
   if (LOCAL) return local.loadLatest<T>(coll, count);
   const snap = await getDocs(query(collection(db, coll), orderBy("at", "desc"), limit(count)));
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as T);
+  // entries from before encryption was turned on stay as they were (readable)
+  return Promise.all(snap.docs.map(async (d) => ({ id: d.id, ...(await openDoc(d.data())) }) as T));
 }
 
 /* ---------------- Tally balances ---------------- */
 // replaces one company's balances (same document the Windows app's sync writes)
-export async function saveBalances(company: "business" | "cash", entry: BalanceSet & { matched: number; unmatched: string[] }) {
+export async function saveBalances(company: string, entry: BalanceSet & { matched: number; unmatched: string[] }) {
   if (LOCAL) throw new Error("Balances now come from Tally automatically (every 15 minutes); there's nothing to import.");
   const user = auth.currentUser;
   if (!user) return;
-  await setDoc(doc(db, "balances", company), { ...(stable(entry) as object), at: serverTimestamp(), by: user.email || "" });
+  await setDoc(doc(db, "balances", company), await sealDoc("balances", { ...(stable(entry) as object), at: serverTimestamp(), by: user.email || "" }));
   await logEvent("balances-imported", { name: entry.label, file: entry.file, matched: entry.matched, unmatched: entry.unmatched.length });
 }
 
@@ -242,6 +271,53 @@ export async function loadTallyVouchers() {
   if (LOCAL) return local.loadTally<Record<string, TallyVoucherSet>>("vouchers");
   const snap = await getDocs(collection(db, "tallyVouchers"));
   const out: Record<string, TallyVoucherSet> = {};
-  snap.docs.forEach((d) => { out[d.id] = d.data() as TallyVoucherSet; });
+  for (const d of snap.docs) out[d.id] = await openDoc<TallyVoucherSet>(d.data(), "tallyVouchers/" + d.id);
   return out;
+}
+
+/* ---------------- encryption (turned on once, from Settings) ---------------- */
+// every collection that holds records; History and saved messages are add-only,
+// so entries written before encryption stay as they were
+export const ENCRYPTED_COLLECTIONS = ["customers", "products", "transports", "orders", "services", "receipts", "settings", "balances", "tallyVouchers", "tallyStock", "tallyBills"];
+
+// saves the new passphrase's check value, then rewrites every record encrypted
+// (same content, same created/updated stamps). One History entry for the lot.
+export async function turnOnEncryption(pass: string, progress: (done: number, total: number) => void) {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Not signed in.");
+  const cfg = await newConfig(pass, user.email || "");
+  const ref = doc(db, "settings", "crypto");
+  await runTransaction(db, async (tx) => {
+    const cur = await tx.get(ref);
+    if (cur.exists() && (cur.data() as CryptoConfig).on) throw new Error("Encryption was already turned on from another device. Enter that passphrase instead.");
+    tx.set(ref, cfg);
+  });
+  await setCryptoConfig(cfg);
+  const counts: Record<string, number> = {};
+  const todo: { coll: string; id: string; data: DocumentData }[] = [];
+  for (const coll of ENCRYPTED_COLLECTIONS) {
+    const snap = await getDocs(collection(db, coll));
+    counts[coll] = 0;
+    snap.docs.forEach((d) => {
+      if (coll === "settings" && d.id === "crypto") return;
+      if (typeof d.data().enc === "string") return;
+      todo.push({ coll, id: d.id, data: d.data() });
+      counts[coll]++;
+    });
+  }
+  // batches kept well under Firestore's limits (500 writes / 10 MB)
+  let batch = writeBatch(db), n = 0, size = 0, done = 0;
+  progress(0, todo.length);
+  for (const t of todo) {
+    const sealed = await sealDoc(t.coll, t.data);
+    const len = String(sealed.enc || "").length;
+    if (n && (n >= 200 || size + len > 4_000_000)) { await batch.commit(); batch = writeBatch(db); n = 0; size = 0; }
+    batch.set(doc(db, t.coll, t.id), sealed);   // whole record replaced: no readable copy left
+    n++; size += len; done++;
+    if (done % 25 === 0) progress(done, todo.length);
+  }
+  if (n) await batch.commit();
+  progress(todo.length, todo.length);
+  await logEvent("encryption-turned-on", { name: "Encryption", records: todo.length, ...counts });
+  return todo.length;
 }
