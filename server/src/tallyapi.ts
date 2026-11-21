@@ -25,6 +25,13 @@ async function meta(db: pg.Pool) {
   return Object.fromEntries(r.rows.map((x) => [x.id, { label: x.label as string, tallyCompany: x.tally_company as string, syncedAt: x.synced ? new Date(x.synced).toISOString() : "" }]));
 }
 
+// while Firebase is live: the Windows app's own uploads, copied from Firebase
+// (every company it syncs, in exactly the shape the pages use); null until copied
+export async function fromCopy(db: pg.Pool, kind: "balances" | "tallyVouchers" | "tallyBills" | "tallyStock") {
+  const rows = (await db.query("SELECT key, data FROM fb_tally WHERE kind = $1", [kind])).rows as { key: string; data: Record<string, unknown> }[];
+  return rows.length ? Object.fromEntries(rows.map((r) => [r.key, r.data])) : null;
+}
+
 export async function balances(db: pg.Pool) {
   const m = await meta(db);
   const rows = (await db.query(`WITH p AS (${PARTIES})

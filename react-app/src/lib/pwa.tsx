@@ -12,7 +12,8 @@ import { APP_VERSION } from "@/version";
 const BASE = import.meta.env.BASE_URL;
 
 export function registerServiceWorker() {
-  if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  // not in the Android app: its pages are already on the phone
+  if (import.meta.env.PROD && import.meta.env.VITE_NATIVE !== "1" && "serviceWorker" in navigator) {
     window.addEventListener("load", () => { navigator.serviceWorker.register(BASE + "sw.js", { scope: BASE }).catch(() => {}); });
   }
 }

@@ -20,9 +20,12 @@ function versionFile() {
   };
 }
 
-export default defineConfig({
-  base: "/Chittamenterprises/next/",
+// npm run build:android (mode "android"): the same app for the Android app,
+// talking to the office PC server; built into dist-android, which Capacitor
+// copies into the Android project (android/)
+export default defineConfig(({ mode }) => ({
+  base: mode === "android" ? "./" : "/Chittamenterprises/next/",
   plugins: [react(), tailwindcss(), versionFile()],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
-  build: { outDir: "../next", emptyOutDir: true, chunkSizeWarningLimit: 1400 },
-});
+  build: { outDir: mode === "android" ? "dist-android" : "../next", emptyOutDir: true, chunkSizeWarningLimit: 1400 },
+}));

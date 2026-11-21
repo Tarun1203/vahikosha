@@ -8,9 +8,13 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "dev:local": "vite --mode localserver"
+    "dev:local": "vite --mode localserver",
+    "build:android": "vite build --mode android && cap sync android",
+    "apk": "npm run build:android && cd android && gradlew.bat assembleDebug"
   },
   "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/core": "8.6.0",
     "@tabler/icons-react": "^3.52.0",
     "clsx": "^2.1.1",
     "firebase": "^13.4.0",
@@ -23,6 +27,7 @@
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.6.0",
     "@tailwindcss/vite": "^4.3.5",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",

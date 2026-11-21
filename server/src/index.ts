@@ -12,6 +12,7 @@
 //   GET  /api/history?coll=activity|messages&limit=300   newest first
 //   GET  /api/tally/balances|vouchers|bills|stock         figures from the Tally mirror
 //   POST /api/tally/sync                 read Tally now
+//   POST /api/firebase/copy              copy Firebase changes now (also every 5 minutes)
 //   GET  /api/events?token=…             live updates (Server-Sent Events)
 //
 // Every route except /api/health needs a signed-in session (Authorization: Bearer <token>).
@@ -25,12 +26,14 @@ import { pool, tx } from "./db.ts";
 import { login, logout, sessionUser, type SessionUser } from "./auth.ts";
 import * as tally from "./tallyapi.ts";
 import { runMirror } from "./mirror-tally.ts";
+import { copyFromFirebase } from "./firebase-copy.ts";
 
 const cfg = loadConfig();
 const db = pool(cfg);
 const COLLECTIONS = new Set(["customers", "products", "transports", "orders", "services", "receipts", "messages", "settings"]);
 const VERSION = "0.2.0";
 const MIRROR_MINUTES = 15;
+const COPY_MINUTES = 5;
 
 // ---------------------------------------------------------------- live updates
 const listeners = new Set<ServerResponse>();
@@ -61,6 +64,15 @@ async function mirrorNow(reason: string) {
   } finally { mirrorBusy = false; }
 }
 
+// ---------------------------------------------------------------- Firebase copy, every 5 minutes
+// (while Firebase is still the live database; CHITTAM_FIREBASE_COPY=off stops it)
+let copyLast = "", copyError = "";
+async function copyNow(reason: string) {
+  const r = await copyFromFirebase(db, (s) => console.log(new Date().toLocaleTimeString("en-IN") + " Firebase copy (" + reason + "): " + s));
+  if (r.ok) { copyLast = new Date().toISOString(); copyError = ""; } else if (r.error !== "already running") copyError = r.error || "";
+  return r;
+}
+
 // ---------------------------------------------------------------- helpers
 const send = (res: ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -86,7 +98,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // ---- open routes
   if (parts[1] === "health" && req.method === "GET") {
     const m = await db.query("SELECT name FROM schema_migrations ORDER BY name");
-    return send(res, 200, { ok: true, server: VERSION, time: new Date().toISOString(), migrations: m.rows.map((x) => x.name), tallyMirror: mirrorLast });
+    return send(res, 200, { ok: true, server: VERSION, time: new Date().toISOString(), migrations: m.rows.map((x) => x.name), tallyMirror: mirrorLast, firebaseCopy: copyLast, firebaseCopyError: copyError });
   }
   if (parts[1] === "login" && req.method === "POST") {
     const b = (await readBody(req)) as { email?: string; password?: string; device?: string };
@@ -115,13 +127,15 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (parts[1] === "tally" && req.method === "GET") {
     const what = parts[2];
-    if (what === "balances") return send(res, 200, await tally.balances(db));
-    if (what === "vouchers") return send(res, 200, await tally.vouchers(db));
-    if (what === "bills") return send(res, 200, await tally.bills(db));
-    if (what === "stock") return send(res, 200, await tally.stock(db));
+    // the Windows app's uploads copied from Firebase (all companies) when there are any; else the mirror
+    if (what === "balances") return send(res, 200, (await tally.fromCopy(db, "balances")) || (await tally.balances(db)));
+    if (what === "vouchers") return send(res, 200, (await tally.fromCopy(db, "tallyVouchers")) || (await tally.vouchers(db)));
+    if (what === "bills") return send(res, 200, (await tally.fromCopy(db, "tallyBills")) || (await tally.bills(db)));
+    if (what === "stock") return send(res, 200, (await tally.fromCopy(db, "tallyStock")) || (await tally.stock(db)));
     return send(res, 404, { error: "Unknown Tally data" });
   }
   if (parts[1] === "tally" && parts[2] === "sync" && req.method === "POST") return send(res, 200, await mirrorNow("asked by " + user));
+  if (parts[1] === "firebase" && parts[2] === "copy" && req.method === "POST") return send(res, 200, await copyNow("asked by " + user));
 
   if (parts[1] === "history" && req.method === "GET") {
     const n = Math.min(Number(url.searchParams.get("limit")) || 300, 2000);
@@ -149,8 +163,14 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (parts[1] === "activity" && req.method === "POST") {
     const b = (await readBody(req)) as Record<string, unknown>;
     if (!b.action) return send(res, 400, { error: "action is required" });
-    await db.query("INSERT INTO activity (by_user, collection, record_id, action, name, details) VALUES ($1, $2, $3, $4, $5, $6)",
-      [user, String(b.collection || "app"), b.recordId ? String(b.recordId) : null, String(b.action), String(b.name || ""), b.details ?? null]);
+    // a phone resending an entry from its outbox: saved once
+    const entryKey = String(req.headers["x-entry-key"] || "");
+    await tx(db, async (c) => {
+      if (entryKey && (await c.query("SELECT 1 FROM submissions WHERE entry_key = $1", [entryKey])).rowCount) return;
+      await c.query("INSERT INTO activity (by_user, collection, record_id, action, name, details) VALUES ($1, $2, $3, $4, $5, $6)",
+        [user, String(b.collection || "app"), b.recordId ? String(b.recordId) : null, String(b.action), String(b.name || ""), b.details ?? null]);
+      if (entryKey) await c.query("INSERT INTO submissions (entry_key, by_user, collection, record_id, result) VALUES ($1, $2, 'activity', '', $3)", [entryKey, user, { ok: true }]);
+    });
     return send(res, 201, { ok: true });
   }
 
@@ -202,7 +222,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 }
 
 // the local copy of the app (npm run dev on this PC) may call the server from the browser
-const LOCAL_ORIGINS = new Set(["http://localhost:5173", "http://127.0.0.1:5173"]);
+// and the Android app (its pages are served inside the app as http://localhost)
+const LOCAL_ORIGINS = new Set(["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost"]);
 
 const server = createServer((req, res) => {
   const origin = String(req.headers.origin || "");
@@ -229,3 +250,8 @@ if (process.env.CHITTAM_MIRROR === "on") {
   setInterval(() => mirrorNow("every " + MIRROR_MINUTES + " min"), MIRROR_MINUTES * 60e3);
   console.log("Tally mirror: every " + MIRROR_MINUTES + " minutes");
 } else console.log("Tally mirror: off (set CHITTAM_MIRROR=on to read Tally every " + MIRROR_MINUTES + " minutes)");
+if (process.env.CHITTAM_FIREBASE_COPY !== "off") {
+  setTimeout(() => copyNow("start"), 3000);
+  setInterval(() => copyNow("every " + COPY_MINUTES + " min"), COPY_MINUTES * 60e3);
+  console.log("Firebase copy: every " + COPY_MINUTES + " minutes");
+}

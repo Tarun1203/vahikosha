@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Chittam Enterprises</string>
+    <string name="title_activity_main">Chittam Enterprises</string>
+    <string name="package_name">in.chittamenterprises.app</string>
+    <string name="custom_url_scheme">in.chittamenterprises.app</string>
+</resources>

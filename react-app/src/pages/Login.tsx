@@ -5,6 +5,7 @@ import { Button, Field, Icon3D } from "@/components/kit";
 import { useStore } from "@/lib/store";
 import { unlock } from "@/lib/crypto";
 import { logEvent } from "@/lib/data";
+import { NATIVE, serverAddress, setServerAddress } from "@/lib/local";
 
 // shown once per device after encryption is turned on: the company passphrase
 export function Unlock() {
@@ -53,6 +54,8 @@ export function Unlock() {
 
 export function Login() {
   const { signIn } = useStore();
+  // Android app: the office PC's address (its Tailscale name), remembered on the phone
+  const [server, setServer] = useState(() => serverAddress().replace(/^http:\/\//, "").replace(/:8484$/, ""));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -63,10 +66,16 @@ export function Login() {
     setError("");
     setBusy(true);
     try {
+      if (NATIVE) {
+        if (!server.trim()) throw new Error("Enter the office PC's address.");
+        setServerAddress(server);
+      }
       await signIn(email.trim(), password);
     } catch (err) {
       const code = (err as { code?: string }).code || "";
-      setError(/invalid|wrong|not-found|credential/i.test(code) ? "Wrong email or password." : (err as Error).message);
+      const msg = (err as Error).message || "";
+      setError(/invalid|wrong|not-found|credential/i.test(code) ? "Wrong email or password."
+        : NATIVE && /fetch|network/i.test(msg) ? "Can't reach the office PC at " + serverAddress() + ". Check Tailscale is on (on this phone and the PC) and the address is right." : msg);
     } finally {
       setBusy(false);
     }
@@ -89,6 +98,11 @@ export function Login() {
           </div>
         </div>
         <form onSubmit={submit} className="space-y-4">
+          {NATIVE && (
+            <Field label="Office PC address" hint="The PC's name in Tailscale, e.g. office-pc">
+              <input className="field-input" autoCapitalize="none" autoCorrect="off" value={server} onChange={(e) => setServer(e.target.value)} required />
+            </Field>
+          )}
           <Field label="Email">
             <input className="field-input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </Field>
