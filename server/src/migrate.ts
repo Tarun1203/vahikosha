@@ -18,9 +18,12 @@ export async function migrate(log = console.log) {
     let applied = 0;
     for (const f of files) {
       const sql = readFileSync(join(dir, f), "utf8");
-      const sha = createHash("sha256").update(sql).digest("hex");
+      // line endings don't count (git may check files out with CRLF or LF)
+      const lf = sql.replace(/\r\n/g, "\n");
+      const sha = createHash("sha256").update(lf).digest("hex");
+      const shaCrlf = createHash("sha256").update(lf.replace(/\n/g, "\r\n")).digest("hex");
       if (done.has(f)) {
-        if (done.get(f) !== sha) throw new Error(f + " was changed after it was applied. Add a new migration instead.");
+        if (done.get(f) !== sha && done.get(f) !== shaCrlf) throw new Error(f + " was changed after it was applied. Add a new migration instead.");
         continue;
       }
       await tx(p, async (c) => {
