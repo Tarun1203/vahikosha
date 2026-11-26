@@ -73,7 +73,7 @@
     });
     // pages that live in the new app (same site, so they open inside this app)
     if(title === 'More'){
-      [['ledger', 'notebook', 'Ledger Statement'], ['tally', 'star', 'Tally Match'], ['party-codes', 'location', 'Parties & codes']].forEach(function(p){
+      [['ledger', 'notebook', 'Ledger Statement'], ['receivables', 'money-bag', 'List of Receivables'], ['tally', 'star', 'Tally Match'], ['party-codes', 'location', 'Parties & codes']].forEach(function(p){
         var tm = document.createElement('button');
         tm.type = 'button'; tm.className = 'm-sheet-item';
         tm.innerHTML = '<span class="ic"><img class="ic3d" src="icons3d/' + p[1] + '.png" alt="" draggable="false"></span><span>' + p[2] + '</span>';

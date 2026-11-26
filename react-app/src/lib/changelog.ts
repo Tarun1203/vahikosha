@@ -4,6 +4,15 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.39", date: "2026-11-26", title: "List of receivables",
+    items: [
+      "New page Messages → List of receivables: everyone who owes money across every Tally company — each party once (its brand ledgers and differently spelled ledgers added up), with each company's amount, the total, its oldest open bill (days) and how much is overdue.",
+      "Filter by route, type (dealer, technician…), company, amount and age of the oldest bill; sort by amount, age, code or name; grouped by route with route totals. Tally ledgers with a balance that aren't in the app are listed too (“Not in the app”).",
+      "PDF to WhatsApp (List of Receivables as on today, with your filters, route totals and the grand total) and CSV for Excel. “Also show advances” lists credit balances separately.",
+      "Also on the old app's home screen and phone More menu.",
+    ],
+  },
+  {
     version: "3.38", date: "2026-11-21", title: "Brand ledgers: one party, a ledger per brand",
     items: [
       "For parties kept as separate Tally ledgers per brand (e.g. “Mallu Mobiles - Pothnal - Makwell / - Flyvision / - Haier”): in Parties & codes, “+ Brand ledger” under a company links each brand ledger to the same party, with its brand.",

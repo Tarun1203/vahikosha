@@ -29,6 +29,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
       { to: "/payment-reminder", label: "Payment Reminder", icon: "calender" },
       { to: "/balance-confirmation", label: "Balance Confirmation", icon: "notebook" },
       { to: "/ledger", label: "Ledger Statement", icon: "notebook" },
+      { to: "/receivables", label: "List of receivables", icon: "money-bag" },
       { to: "/dispatch", label: "Dispatch Confirmation", icon: "rocket" },
       { to: "/stock-update", label: "Stock Update", icon: "bag" },
       { to: "/stock-return", label: "Stock Return", icon: "back" },
