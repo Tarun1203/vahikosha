@@ -50,7 +50,7 @@ function Section({ title, children, action }: { title: string; children: React.R
 
 /* ================= Payment Reminder ================= */
 export function PaymentReminder() {
-  const { settings, customers } = useStore();
+  const { settings, customers, balancesLoaded } = useStore();
   const [params] = useSearchParams();
   const opened = useRef(false);
   const tally = useTallyFill();
@@ -87,13 +87,13 @@ export function PaymentReminder() {
     const when = syncedWhen(companies.map((co) => tallyBills[co.key]?.syncedAt).find(Boolean));
     setBillNote("🧾 " + count + " open invoice" + (count === 1 ? "" : "s") + " and pending days filled in from Tally (synced " + when + "). Check before sending.");
   }
-  // opened from another page (List of receivables) with ?c=<customer id>: pick it once the Tally bills are in
+  // opened from another page (List of receivables) with ?c=<customer id>: pick it once the Tally balances and bills are in
   useEffect(() => {
     const id = params.get("c");
-    if (!id || opened.current || tallyBills === null) return;
+    if (!id || opened.current || tallyBills === null || !balancesLoaded) return;
     const c = customers.find((x) => x.id === id);
     if (c) { opened.current = true; pick(c); }
-  }, [params, customers, tallyBills]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [params, customers, tallyBills, balancesLoaded]);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div>
       <PageHeader icon="calender" eyebrow="Messages" title="Payment Reminder" subtitle="Outstanding in both accounts, invoice-wise due dates, and your UPI / bank details from Settings." />

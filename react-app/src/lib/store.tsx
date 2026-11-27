@@ -23,6 +23,7 @@ interface Store {
   services: ServiceJob[];
   receipts: Receipt[];
   balances: Record<string, BalanceSet>; // "business" / "cash" from Tally
+  balancesLoaded: boolean;               // the balances have been read once
   synced: boolean; // false while showing data saved on this device (offline)
   error: string;
   crypto: CryptoConfig | null; // set when the data is encrypted
@@ -44,6 +45,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [services, setServices] = useState<ServiceJob[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [balances, setBalances] = useState<Record<string, BalanceSet>>({});
+  const [balancesLoaded, setBalancesLoaded] = useState(false);
   const [synced, setSynced] = useState(false);
   const [error, setError] = useState("");
   const [crypto, setCrypto] = useState<CryptoConfig | null>(null);
@@ -57,7 +59,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (import.meta.env.DEV && new URLSearchParams(location.search).has("demo")) {
       import("./demo").then((d) => {
         setUser(d.demoUser); setParties(d.demoCustomers); setCustomers(d.demoCustomers); setProducts(d.demoProducts); setTransports(d.demoTransports);
-        setOrders(d.demoOrders); setServices(d.demoServices); setReceipts(d.demoReceipts); setBalances(d.demoBalances);
+        setOrders(d.demoOrders); setServices(d.demoServices); setReceipts(d.demoReceipts); setBalances(d.demoBalances); setBalancesLoaded(true);
         setSettingsLoaded(true); setSynced(true); setAuthReady(true); setCryptoReady(true);
       });
       return;
@@ -86,7 +88,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       listenCollection<BalanceSet & { id: string }>("balances", (items) => {
         const map: Record<string, BalanceSet> = {};
         items.forEach((b) => { map[b.id] = b; });
-        setBalances(map);
+        setBalances(map); setBalancesLoaded(true);
       }, fail),
       listenDoc<Settings>("settings", "main", (s) => { setSettings({ ...defaultSettings, ...(s || {}) }); setSettingsLoaded(true); }, fail),
     ];
@@ -112,6 +114,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     services,
     receipts,
     balances,
+    balancesLoaded,
     synced,
     error,
     crypto,

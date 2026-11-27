@@ -4,6 +4,12 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.41", date: "2026-11-27", title: "Remind opened in a new tab fills in the balances",
+    items: [
+      "A Payment Reminder opened from List of receivables in a new tab (or after a reload) now waits for the Tally balances before filling in, so the outstanding amounts are never left empty.",
+    ],
+  },
+  {
     version: "3.40", date: "2026-11-27", title: "WhatsApp reminder from the List of receivables",
     items: [
       "Each party in Messages → List of receivables has a green “Remind” button: it opens Payment Reminder with that party already picked — balances in every company, open invoices with due dates and pending days filled in from Tally — ready to send on WhatsApp.",
