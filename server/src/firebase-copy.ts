@@ -123,7 +123,7 @@ export async function copyFromFirebase(db: pg.Pool, log: (s: string) => void = (
         if (ex.rowCount) await db.query(`UPDATE ${coll} SET data = $2, updated_by = $3 WHERE id = $1`, [pgId, data, String(updatedBy || "firebase")]);
         else await db.query(`INSERT INTO ${coll} (id, data, created_at, updated_at, updated_by) VALUES ($1, $2, $3, $4, $5)`,
           [pgId, data, (createdAt as string) || (updatedAt as string) || new Date().toISOString(), (updatedAt as string) || new Date().toISOString(), String(updatedBy || "firebase")]);
-        await db.query("SELECT pg_notify('chittam_changes', $1)", [JSON.stringify({ collection: coll, id: pgId })]);
+        await db.query("SELECT pg_notify('chittam_changes', ($1::jsonb || jsonb_build_object('business', current_business()))::text)", [JSON.stringify({ collection: coll, id: pgId })]);
         n++;
       }
       await saveState(db, coll, newest(docs, "updatedAt", state[coll] ?? null), n);
@@ -137,7 +137,7 @@ export async function copyFromFirebase(db: pg.Pool, log: (s: string) => void = (
       for (const doc of docs) {
         const a = open(doc.data);
         if (coll === "messages") {
-          const r = await db.query("INSERT INTO messages (id, data, created_at, updated_by) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING",
+          const r = await db.query("INSERT INTO messages (id, data, created_at, updated_by) VALUES ($1, $2, $3, $4) ON CONFLICT (business_id, id) DO NOTHING",
             [doc.id, a, (a.at as string) || new Date().toISOString(), String(a.by || "")]);
           n += r.rowCount || 0;
         } else {
@@ -160,14 +160,14 @@ export async function copyFromFirebase(db: pg.Pool, log: (s: string) => void = (
       for (const doc of docs) {
         const { at: _a, by: _b, ...data } = open(doc.data);
         const r = await db.query(`INSERT INTO fb_tally (kind, key, data) VALUES ($1, $2, $3)
-          ON CONFLICT (kind, key) DO UPDATE SET data = EXCLUDED.data, copied_at = now() WHERE fb_tally.data IS DISTINCT FROM EXCLUDED.data`, [kind, doc.id, data]);
+          ON CONFLICT (business_id, kind, key) DO UPDATE SET data = EXCLUDED.data, copied_at = now() WHERE fb_tally.data IS DISTINCT FROM EXCLUDED.data`, [kind, doc.id, data]);
         n += r.rowCount || 0;
       }
       await saveState(db, kind, newest(docs, "at", state[kind] ?? null), n);
       if (n) copied[kind] = n;
     }
     if (copied.balances || copied.tallyVouchers || copied.tallyBills || copied.tallyStock)
-      await db.query("SELECT pg_notify('chittam_changes', $1)", [JSON.stringify({ collection: "tally" })]);
+      await db.query("SELECT pg_notify('chittam_changes', ($1::jsonb || jsonb_build_object('business', current_business()))::text)", [JSON.stringify({ collection: "tally" })]);
 
     const total = Object.values(copied).reduce((t, x) => t + x, 0);
     if (total) await db.query("INSERT INTO activity (by_user, collection, action, name, details) VALUES ('server', 'app', 'firebase-copy', 'Copied from Firebase', $1)", [{ copied, encrypted: encOn }]);
@@ -183,14 +183,14 @@ export async function copyFromFirebase(db: pg.Pool, log: (s: string) => void = (
 
 async function saveState(db: pg.Pool, coll: string, lastSeen: string, n: number) {
   await db.query(`INSERT INTO fb_copy_state (coll, last_seen, last_run, copied) VALUES ($1, NULLIF($2, '')::timestamptz, now(), $3)
-    ON CONFLICT (coll) DO UPDATE SET last_seen = COALESCE(NULLIF($2, '')::timestamptz, fb_copy_state.last_seen), last_run = now(), copied = fb_copy_state.copied + $3`, [coll, lastSeen, n]);
+    ON CONFLICT (business_id, coll) DO UPDATE SET last_seen = COALESCE(NULLIF($2, '')::timestamptz, fb_copy_state.last_seen), last_run = now(), copied = fb_copy_state.copied + $3`, [coll, lastSeen, n]);
 }
 
 // run once from the command line
 if (process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("src/firebase-copy.ts")) {
   const { loadConfig } = await import("./config.ts");
-  const { pool } = await import("./db.ts");
-  const p = pool(loadConfig());
+  const { pool, CHITTAM_BUSINESS } = await import("./db.ts");
+  const p = pool(loadConfig(), CHITTAM_BUSINESS);
   const r = await copyFromFirebase(p, (s) => console.log("Firebase copy: " + s));
   await p.end();
   process.exit(r.ok ? 0 : 1);

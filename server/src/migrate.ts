@@ -8,13 +8,14 @@ import { pool, tx } from "./db.ts";
 
 const dir = join(import.meta.dirname, "..", "migrations");
 
-export async function migrate(log = console.log) {
-  const p = pool(loadConfig());
+// upTo: stop after this file (the tests use it to fill an older database first)
+export async function migrate(log = console.log, upTo = "") {
+  const p = pool(loadConfig(), null, "vahikosha-migrate");
   try {
     await p.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       name text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`);
     const done = new Map((await p.query("SELECT name, sha256 FROM schema_migrations")).rows.map((r) => [r.name as string, r.sha256 as string]));
-    const files = readdirSync(dir).filter((f) => /^\d{3}_.+\.sql$/.test(f)).sort();
+    const files = readdirSync(dir).filter((f) => /^\d{3}_.+\.sql$/.test(f) && (!upTo || f <= upTo)).sort();
     let applied = 0;
     for (const f of files) {
       const sql = readFileSync(join(dir, f), "utf8");

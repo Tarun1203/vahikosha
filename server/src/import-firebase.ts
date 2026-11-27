@@ -9,7 +9,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "./config.ts";
-import { pool, tx } from "./db.ts";
+import { CHITTAM_BUSINESS, pool, tx } from "./db.ts";
 
 const RECORDS = ["customers", "products", "transports", "orders", "services", "receipts", "messages", "settings"] as const;
 const FROM_TALLY = ["balances", "tallyVouchers", "tallyStock", "tallyBills"];
@@ -36,7 +36,7 @@ const plain = (v: unknown): unknown =>
 const when = (d: Record<string, unknown>, ...keys: string[]) => { for (const k of keys) if (typeof d[k] === "string" && !isNaN(Date.parse(d[k] as string))) return d[k] as string; return null; };
 const money = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
 
-const p = pool(cfg);
+const p = pool(cfg, CHITTAM_BUSINESS);
 const report: string[] = [];
 let problems = 0;
 try {

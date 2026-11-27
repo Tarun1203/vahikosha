@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type pg from "pg";
 import { loadConfig } from "./config.ts";
-import { pool } from "./db.ts";
+import { CHITTAM_BUSINESS, pool } from "./db.ts";
 import { createHash } from "node:crypto";
 import { collection, date, list, nameOf, num, post, txt, yes } from "./tally.ts";
 
@@ -60,7 +60,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
       const starts = y + "-04-01", ends = (y + 1) + "-03-31";
       if (starts > today) break;
       const r = await c.query(`INSERT INTO financial_years (company_id, starts, ends, tally_company) VALUES ($1, $2, $3, $4)
-        ON CONFLICT (company_id, starts) DO UPDATE SET tally_company = EXCLUDED.tally_company RETURNING id`, [co, starts, ends, company]);
+        ON CONFLICT (business_id, company_id, starts) DO UPDATE SET tally_company = EXCLUDED.tally_company RETURNING id`, [co, starts, ends, company]);
       years.push({ id: r.rows[0].id, starts, ends });
     }
     const firstFy = years[0];
@@ -70,7 +70,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
     for (const g of groups) {
       const nature = yes(g.ISREVENUE) ? (yes(g.ISDEEMEDPOSITIVE) ? "expense" : "income") : (yes(g.ISDEEMEDPOSITIVE) ? "asset" : "liability");
       await c.query(`INSERT INTO account_groups (company_id, name, parent, nature, tally_guid) VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (company_id, name) DO UPDATE SET parent = EXCLUDED.parent, nature = EXCLUDED.nature, tally_guid = EXCLUDED.tally_guid, updated_at = now()
+        ON CONFLICT (business_id, company_id, name) DO UPDATE SET parent = EXCLUDED.parent, nature = EXCLUDED.nature, tally_guid = EXCLUDED.tally_guid, updated_at = now()
         WHERE (account_groups.parent, account_groups.nature, account_groups.tally_guid) IS DISTINCT FROM (EXCLUDED.parent, EXCLUDED.nature, EXCLUDED.tally_guid)`,
         [co, nameOf(g), txt(g.PARENT) === "Primary" ? "" : txt(g.PARENT), nature, txt(g.GUID)]);
     }
@@ -85,7 +85,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
       const addr = list(l["ADDRESS.LIST"]).flatMap((a) => list((a as Record<string, unknown>).ADDRESS).map(txt)).filter(Boolean);
       const r = await c.query(`INSERT INTO ledgers (company_id, name, group_name, gstin, state, pincode, address, mobile, credit_days, billwise, customer_id, tally_guid)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        ON CONFLICT (company_id, name) DO UPDATE SET group_name = EXCLUDED.group_name, gstin = EXCLUDED.gstin, state = EXCLUDED.state, pincode = EXCLUDED.pincode,
+        ON CONFLICT (business_id, company_id, name) DO UPDATE SET group_name = EXCLUDED.group_name, gstin = EXCLUDED.gstin, state = EXCLUDED.state, pincode = EXCLUDED.pincode,
           address = EXCLUDED.address, mobile = EXCLUDED.mobile, credit_days = EXCLUDED.credit_days, billwise = EXCLUDED.billwise,
           customer_id = COALESCE(EXCLUDED.customer_id, ledgers.customer_id), tally_guid = EXCLUDED.tally_guid, updated_at = now()
         RETURNING id`,
@@ -105,7 +105,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
         const cpDate = Date.parse(cp.replace(/-(\d\d)$/, "-20$1"));
         const due = cpDays && billDate ? iso(new Date(Date.parse(billDate) + Number(cpDays[1]) * 86400e3)) : !isNaN(cpDate) ? iso(new Date(cpDate + 12 * 3600e3)) : null;
         await c.query(`INSERT INTO opening_bills (company_id, ledger, name, bill_date, due_date, amount) VALUES ($1, $2, $3, $4, $5, $6)
-          ON CONFLICT (company_id, ledger, name) DO UPDATE SET bill_date = EXCLUDED.bill_date, due_date = EXCLUDED.due_date, amount = EXCLUDED.amount
+          ON CONFLICT (business_id, company_id, ledger, name) DO UPDATE SET bill_date = EXCLUDED.bill_date, due_date = EXCLUDED.due_date, amount = EXCLUDED.amount
           WHERE (opening_bills.bill_date, opening_bills.due_date, opening_bills.amount) IS DISTINCT FROM (EXCLUDED.bill_date, EXCLUDED.due_date, EXCLUDED.amount)`,
           [co, name, txt(ob.NAME), billDate, due, r2(-num(ob.OPENINGBALANCE))]);
       }
@@ -117,18 +117,18 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
     const baseOf = (t: string) => { let x = t; for (let i = 0; i < 10; i++) { const p = parentOf.get(x); if (!p || p === x) return x; x = p; } return x; };
     for (const v of vtypes)
       await c.query(`INSERT INTO voucher_types (company_id, name, base_type, numbering) VALUES ($1, $2, $3, $4)
-        ON CONFLICT (company_id, name) DO UPDATE SET base_type = EXCLUDED.base_type, numbering = EXCLUDED.numbering`, [co, nameOf(v), baseOf(nameOf(v)), txt(v.NUMBERINGMETHOD)]);
+        ON CONFLICT (business_id, company_id, name) DO UPDATE SET base_type = EXCLUDED.base_type, numbering = EXCLUDED.numbering`, [co, nameOf(v), baseOf(nameOf(v)), txt(v.NUMBERINGMETHOD)]);
     for (const g of await collection(company, "StockGroup", "Name, Parent"))
-      await c.query("INSERT INTO stock_groups (company_id, name, parent) VALUES ($1, $2, $3) ON CONFLICT (company_id, name) DO UPDATE SET parent = EXCLUDED.parent", [co, nameOf(g), txt(g.PARENT) === "Primary" ? "" : txt(g.PARENT)]);
+      await c.query("INSERT INTO stock_groups (company_id, name, parent) VALUES ($1, $2, $3) ON CONFLICT (business_id, company_id, name) DO UPDATE SET parent = EXCLUDED.parent", [co, nameOf(g), txt(g.PARENT) === "Primary" ? "" : txt(g.PARENT)]);
     for (const u of await collection(company, "Unit", "Name"))
       await c.query("INSERT INTO units (company_id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING", [co, nameOf(u)]);
     for (const g of await collection(company, "Godown", "Name, Parent"))
-      await c.query("INSERT INTO godowns (company_id, name, parent) VALUES ($1, $2, $3) ON CONFLICT (company_id, name) DO UPDATE SET parent = EXCLUDED.parent", [co, nameOf(g), txt(g.PARENT) === "Primary" ? "" : txt(g.PARENT)]);
+      await c.query("INSERT INTO godowns (company_id, name, parent) VALUES ($1, $2, $3) ON CONFLICT (business_id, company_id, name) DO UPDATE SET parent = EXCLUDED.parent", [co, nameOf(g), txt(g.PARENT) === "Primary" ? "" : txt(g.PARENT)]);
     const products = new Map((await c.query("SELECT id, name FROM products")).rows.map((r) => [norm(r.name || ""), r.id as string]));
     const items = await collection(company, "StockItem", "Name, Parent, BaseUnits, GUID, OpeningBalance, OpeningValue, ClosingBalance, ClosingValue");
     for (const s of items)
       await c.query(`INSERT INTO stock_items (company_id, name, group_name, unit, product_id, tally_guid) VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (company_id, name) DO UPDATE SET group_name = EXCLUDED.group_name, unit = EXCLUDED.unit, product_id = COALESCE(EXCLUDED.product_id, stock_items.product_id), tally_guid = EXCLUDED.tally_guid, updated_at = now()`,
+        ON CONFLICT (business_id, company_id, name) DO UPDATE SET group_name = EXCLUDED.group_name, unit = EXCLUDED.unit, product_id = COALESCE(EXCLUDED.product_id, stock_items.product_id), tally_guid = EXCLUDED.tally_guid, updated_at = now()`,
         [co, nameOf(s), txt(s.PARENT), txt(s.BASEUNITS), products.get(norm(nameOf(s))) ?? null, txt(s.GUID)]);
     // Tally's own closing stock (its delivery-note / tracking rules decide it)
     for (const s of items)
@@ -137,7 +137,7 @@ async function mirror(db: pg.Pool, co: Co, company: string, log: (s: string) => 
     // opening stock at the start of the books (Tally: negative value = Dr)
     for (const s of items)
       await c.query(`INSERT INTO stock_openings (company_id, fy_id, item, qty, value) VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (company_id, fy_id, item) DO UPDATE SET qty = EXCLUDED.qty, value = EXCLUDED.value
+        ON CONFLICT (business_id, company_id, fy_id, item) DO UPDATE SET qty = EXCLUDED.qty, value = EXCLUDED.value
         WHERE (stock_openings.qty, stock_openings.value) IS DISTINCT FROM (EXCLUDED.qty, EXCLUDED.value)`,
         [co, firstFy.id, nameOf(s), num(s.OPENINGBALANCE), r2(-num(s.OPENINGVALUE))]);
     await c.query("UPDATE stock_openings SET qty = 0, value = 0 WHERE company_id = $1 AND fy_id <> $2 AND (qty <> 0 OR value <> 0)", [co, firstFy.id]);
@@ -296,7 +296,7 @@ export async function runMirror(db: pg.Pool, only?: Co, log: (s: string) => void
 }
 
 if (process.argv[1]?.endsWith("mirror-tally.ts")) {
-  const db = pool(loadConfig());
+  const db = pool(loadConfig(), CHITTAM_BUSINESS);
   let bad = 0;
   try { bad = (await runMirror(db, process.argv[2] as Co | undefined)).bad; }
   finally { await db.end(); }

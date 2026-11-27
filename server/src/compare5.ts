@@ -1,8 +1,8 @@
 import { post } from "./tally.ts";
 import { loadConfig } from "./config.ts";
-import { pool } from "./db.ts";
+import { CHITTAM_BUSINESS, pool } from "./db.ts";
 import * as tally from "./tallyapi.ts";
-const p = pool(loadConfig());
+const p = pool(loadConfig(), CHITTAM_BUSINESS);
 const bil = await tally.bills(p) as any;
 for (const [co, company] of [["business", "Chittam Enterprises - 2026"], ["cash", "Cash"]]) {
   const xml = await post("<ENVELOPE><HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER><BODY><EXPORTDATA><REQUESTDESC><REPORTNAME>Bills Receivable</REPORTNAME><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>" + company + "</SVCURRENTCOMPANY></STATICVARIABLES></REQUESTDESC></EXPORTDATA></BODY></ENVELOPE>");
