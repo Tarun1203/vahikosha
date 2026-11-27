@@ -272,16 +272,16 @@ The owner's decision: anyone can start a **free trial** by themselves, and buyin
    - the support reset ID check;
    - invoices for the subscription.
 4. The workspace is created with `status: "trial"` and `trialEnds = now + trial length`.
-3. During the trial, everything works within trial limits (devices, records).
+3. During the trial (14 days), the Basic features work with the office PC and 2 other devices, up to a record cap.
 4. The app shows the days left and a **Buy** button.
-5. **Buy** opens the payment page (a payment gateway such as Razorpay, using UPI, card or net banking).
+5. **Buy** opens the Cashfree payment page (UPI, card or net banking) for the chosen plan (Basic, Standard or Pro).
 6. When the payment succeeds, the gateway calls a **Cloud Function** (webhook). The function checks the gateway's signature, then sets:
    - `status: "active"`;
    - the `plan`;
    - `paidUntil`;
    - a payment record in `workspaces/{wid}/payments/` (never deleted).
 7. Renewal works the same way. Reminders are shown 7 days and 1 day before `paidUntil`.
-8. **When the trial or the paid period ends**, the workspace becomes **read-only**: the data can be seen but not changed, until payment. The earlier plan also said "no export". That needs a legal check before launch, because it is the customer's own data.
+8. **When the trial or the paid period ends**, the workspace becomes **read-only**: the data can be seen and **exported**, but not changed, until payment.
 
 **What makes it safe**
 - Only the Cloud Function (Admin SDK) can change `status`, `plan`, `trialEnds` and `paidUntil`. The rules refuse those fields from any app, so a customer can't give themselves a plan.
@@ -342,11 +342,37 @@ Decided 2026-11-27:
 6. **Five roles:** Owner, Accountant (can approve if allowed), Staff, Outside CA (read only, with an end date), and Chittam support (no data access).
 7. **Lost passphrase:** support reset after a PAN check, with a 72-hour wait and alerts. The data is refilled from Tally and the PC's PostgreSQL copy. This replaces the earlier plan line "recovery is owner-held, with no operator bypass". The reset doesn't decrypt anything, so the cloud data stays private.
 8. **PAN and a consent screen** at trial start.
+9. **PAN check:** a paid PAN verification service at sign-up, run by the Cloud Function (about ₹1–5 per check).
+   - The owner opens the provider account; Claude never handles its keys. Cashfree offers PAN verification, so one account can cover both payments and the PAN check.
+   - Only the result (valid, and whether the name matches) and the PAN are stored.
+   - For a support reset, support also checks a PAN card photo on a video call.
+10. **Trial:** 14 days, 2 devices plus the office PC, with a record cap and Basic features.
+11. **Payment gateway:** Cashfree (UPI, cards, net banking, subscriptions, webhooks). The owner creates the account, completes KYC and keeps the keys in the Cloud Function settings. Manual UPI marked in the operator page remains as a backup.
+12. **Plans:** Basic, Standard and Pro, each limited by devices and by features (see "Plans").
+13. **After expiry:** read-only, and **export is still allowed**. This replaces "no export on expiry" and avoids the legal question.
+14. **Cut-over day for Chittam Enterprises:** once work packages 1–7 are tested in demo, on a quiet day (for example a Sunday), with every device updated first.
 
 Still open:
-- **PAN check method:** a paid verification service, or a manual check by support.
-- **Cut-over day** for Chittam Enterprises. Every device needs the new versions installed before that day.
-- **Trial length and limits**, for example 14 or 30 days, 2 devices, and a record cap.
-- **Plans and prices**, and whether billing is monthly or yearly.
-- **Payment gateway.** The owner creates and verifies the gateway account (KYC) and keeps its keys. Claude never handles them.
-- **Export after expiry:** confirm with a legal adviser whether it may be blocked.
+- **Rupee prices** for each plan, and monthly or yearly billing. The structure is settled; the amounts can be set at any time in the operator page.
+- **Feature split between plans:** the table in "Plans" is a proposal for the owner to confirm.
+
+## Plans (proposal)
+
+| | Basic | Standard | Pro |
+|---|---|---|---|
+| Office PC (Tally sync) | 1 | 1 | 2 |
+| Other devices (phones and PCs) | 3 | 8 | 20 |
+| Tally companies | 1 | 3 | Unlimited |
+| Receivables, payments, reminders, ledgers | Yes | Yes | Yes |
+| Orders, products, customers | Yes | Yes | Yes |
+| Service jobs, transports | No | Yes | Yes |
+| Dashboard widgets | Basic set | All | All |
+| Automatic Tally backup | No | Yes | Yes |
+| Roles | Owner and Staff | Plus Accountant | Plus Outside CA |
+| Post receipts to Tally | No | Yes | Yes |
+
+**How limits are enforced:**
+- **Device limit:** only the Cloud Function writes the device count onto the workspace. When the plan's limit is reached, the rules refuse a new `devices/` or `keys/` document.
+- **Feature limits:** where a feature has its own collection (service jobs, transports), the rules refuse writes to it on a plan that lacks it. Screen-only features (widgets, some reports) are hidden by the app according to `plan`.
+- **What these limits can't stop:** someone who modifies the app themselves could bypass a screen-only limit. That doesn't expose any data and only affects that customer, so it is acceptable.
+- **Downgrade:** nothing is deleted. Data from features no longer included becomes read-only. Devices above the new limit stay listed, but the owner must log some out before new ones can be added.
