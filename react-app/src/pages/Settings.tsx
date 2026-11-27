@@ -11,7 +11,7 @@ import { decodeFileText, todayISO } from "@/lib/format";
 import { msgDate } from "@/lib/messages";
 import { APP_UPDATED, APP_VERSION } from "@/version";
 import { cn } from "@/lib/utils";
-import { firebaseProjectId } from "@/lib/firebase";
+import { cloudProject as firebaseProjectId } from "@/lib/relay";
 import { useCompanies } from "@/lib/companies";
 import { partyKey } from "@/lib/parties";
 

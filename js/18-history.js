@@ -162,7 +162,7 @@
     }
     var kind = document.getElementById('histKind').value;
     if(!histCache[kind]) wrap.innerHTML = '<div class="empty-state">Loading…</div>';
-    db.collection(kind).orderBy('at', 'desc').limit(300).get()
+    Relay.coll(kind).orderBy('at', 'desc').limit(300).get()
       .then(function(snap){
         // entries from before encryption was turned on are already readable
         return Promise.all(snap.docs.map(function(d){ return window.ChittamCrypto.openDoc(d.data()); }));

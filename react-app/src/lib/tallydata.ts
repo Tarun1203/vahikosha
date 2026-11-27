@@ -2,8 +2,7 @@
 // Read once when first needed (not kept live: they change at most every
 // 30 minutes) and shared by every page.
 import { useEffect, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "./firebase";
+import { readAll } from "./relay";
 import { normalizeName } from "./data";
 import { openDoc } from "./crypto";
 import { partyKey } from "./parties";
@@ -22,9 +21,8 @@ async function load<T>(coll: "tallyStock" | "tallyBills"): Promise<Record<string
     const d = await import("./demo");
     return (coll === "tallyStock" ? d.demoTallyStock : d.demoTallyBills) as unknown as Record<string, T>;
   }
-  const snap = await getDocs(collection(db, coll));
   const out: Record<string, T> = {};
-  for (const d of snap.docs) out[d.id] = await openDoc<T>(d.data(), coll + "/" + d.id);
+  for (const d of await readAll(coll)) out[d.id] = await openDoc<T>(d.data, coll + "/" + d.id);
   return out;
 }
 

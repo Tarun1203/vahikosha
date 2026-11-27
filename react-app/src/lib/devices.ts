@@ -8,9 +8,7 @@
 // Limit: this is obeyed by the app itself. A phone that is offline logs out
 // when it comes back online. To lock a lost phone out for certain, also change
 // that login's password in the Firebase console.
-import { collection, doc, onSnapshot, serverTimestamp, setDoc, type Timestamp } from "firebase/firestore";
-import { signOut, type User } from "firebase/auth";
-import { auth, db } from "./firebase";
+import { listenAll, listenOne, serverTime, signOut, write, type Timestamp, type User } from "./relay";
 import { APP_VERSION } from "@/version";
 
 export interface Device {
@@ -49,7 +47,7 @@ const appName = () => {
 // job before anything opens the stored data again
 export async function wipeThisDevice() {
   try { localStorage.setItem("cem_wipe", "1"); } catch { /* signed out below anyway */ }
-  try { await signOut(auth); } catch { /* reload signs in fresh */ }
+  try { await signOut(); } catch { /* reload signs in fresh */ }
   location.reload();
 }
 
@@ -57,26 +55,25 @@ export async function wipeThisDevice() {
 // signs out when it is logged out from another device
 export function registerDevice(user: User) {
   const me = thisDevice();
-  const ref = doc(db, "devices", me.id);
-  const beat = () => setDoc(ref, {
+  const beat = () => write("devices", me.id, {
     label: deviceLabel(), app: appName() + " (new)", version: APP_VERSION, email: user.email || "",
-    firstSeen: me.firstSeen, lastSeen: serverTimestamp(),
+    firstSeen: me.firstSeen, lastSeen: serverTime(),
   }, { merge: true }).catch(() => { /* offline: next beat */ });
   beat();
   const timer = setInterval(() => { if (document.visibilityState === "visible") beat(); }, 15 * 60e3);
   const onVisible = () => { if (document.visibilityState === "visible") beat(); };
   document.addEventListener("visibilitychange", onVisible);
-  const unsub = onSnapshot(ref, (d) => { if (d.exists() && d.data().revokedAt) wipeThisDevice(); }, () => { /* rules not published yet */ });
+  const unsub = listenOne("devices", me.id, (d) => { if (d && d.revokedAt) wipeThisDevice(); }, () => { /* rules not published yet */ });
   return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); unsub(); };
 }
 
 export function listenDevices(cb: (list: Device[]) => void, onError?: (e: Error) => void) {
-  return onSnapshot(collection(db, "devices"), (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Device)), onError);
+  return listenAll("devices", (docs) => cb(docs.map((d) => ({ id: d.id, ...d.data }) as Device)), onError);
 }
 
 export async function logoutDevice(id: string, by: string) {
-  await setDoc(doc(db, "devices", id), { revokedAt: serverTimestamp(), revokedBy: by }, { merge: true });
+  await write("devices", id, { revokedAt: serverTime(), revokedBy: by }, { merge: true });
 }
 export async function renameDevice(id: string, name: string) {
-  await setDoc(doc(db, "devices", id), { name: name.trim().slice(0, 60) }, { merge: true });
+  await write("devices", id, { name: name.trim().slice(0, 60) }, { merge: true });
 }

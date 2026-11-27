@@ -36,7 +36,7 @@
     return v;
   }
   function dbSame(a, b){ return JSON.stringify(dbStable(dbStrip(a))) === JSON.stringify(dbStable(dbStrip(b))); }
-  function dbNow(){ return firebase.firestore.FieldValue.serverTimestamp(); }
+  function dbNow(){ return Relay.now(); }
   // encryption (js/00-crypto.js): records are sealed before saving and opened after reading
   var CC = window.ChittamCrypto;
   function dbSeal(coll, data){ return CC.sealDoc(coll, data); }
@@ -56,14 +56,14 @@
     var chunks = [];
     for(var i = 0; i < writes.length; i += 200) chunks.push(writes.slice(i, i + 200));
     return Promise.all(chunks.map(async function(chunk){
-      var batch = db.batch();
+      var batch = Relay.batch();
       for(var j = 0; j < chunk.length; j++){
         var w = chunk[j];
         var data = dbStable(w.data);
         var doc = Object.assign({}, data, {updatedAt: dbNow(), updatedBy: dbUser.email});
         if(w.action === 'create'){ doc.createdAt = dbNow(); doc.createdBy = dbUser.email; }
-        batch.set(db.collection(w.coll).doc(w.id), await dbSeal(w.coll, doc), {merge: w.coll !== 'settings'});
-        batch.set(db.collection('activity').doc(), await dbSeal('activity', {
+        batch.set(Relay.coll(w.coll).doc(w.id), await dbSeal(w.coll, doc), {merge: w.coll !== 'settings'});
+        batch.set(Relay.coll('activity').doc(), await dbSeal('activity', {
           collection: w.coll, docId: w.id, action: w.action,
           name: data.name || data.businessName || (w.coll === 'receipts' ? (data.customerName || '') + ' ' + inr((Number(data.business) || 0) + (Number(data.cash) || 0)) : '') || ((data.orderNo || data.jobNo) ? (data.orderNo || data.jobNo) + (data.customerName ? ' — ' + data.customerName : '') : ''),
           before: w.before ? dbStable(w.before) : null, after: data,
@@ -101,8 +101,8 @@
   function dbLogMessage(type, customer, text, inputs){
     if(!dbReady() || dbLastMessage[type] === text) return; // pressing Generate twice saves once
     dbLastMessage[type] = text;
-    var batch = db.batch();
-    var msgRef = db.collection('messages').doc();
+    var batch = Relay.batch();
+    var msgRef = Relay.coll('messages').doc();
     var pending = [];
     var who = {
       customerId: customer ? customer.id : '',
@@ -116,7 +116,7 @@
     pending.push(dbSeal('activity', {
       collection: 'app', action: 'message-generated', name: who.customerName,
       details: Object.assign({type: type, messageId: msgRef.id}, who), at: dbNow(), by: dbUser.email
-    }).then(function(d){ batch.set(db.collection('activity').doc(), d); }));
+    }).then(function(d){ batch.set(Relay.coll('activity').doc(), d); }));
     Promise.all(pending).then(function(){ return batch.commit(); })
       .catch(function(err){ showToast('Message not saved to history: ' + err.message); });
   }
@@ -134,7 +134,7 @@
       collection: 'app', action: action,
       name: details.name || details.customerName || '',
       details: details, at: dbNow(), by: dbUser.email
-    }).then(function(d){ return db.collection('activity').add(d); })
+    }).then(function(d){ return Relay.coll('activity').add(d); })
       .catch(function(err){ showToast('Not saved to the log: ' + err.message); });
   }
   function dbFlushEvents(){
@@ -187,7 +187,7 @@
       var handler = function(snap){
         dbOpenSnap(snap, seq).then(function(list){ done(list, snap); }).catch(function(err){ if(err !== 'stale') dbReadError(err); });
       };
-      return opts ? db.collection(coll).onSnapshot(opts, handler, dbReadError) : db.collection(coll).onSnapshot(handler, dbReadError);
+      return opts ? Relay.coll(coll).onSnapshot(opts, handler, dbReadError) : Relay.coll(coll).onSnapshot(handler, dbReadError);
     }
     var settingsSeq = 0;
     dbUnsubs = [
@@ -222,7 +222,7 @@
         localStorage.setItem(LS_ORDERS, JSON.stringify(list));
         dbRefreshUi('orders');
       }),
-      db.collection('settings').doc('main').onSnapshot(function(doc){
+      Relay.coll('settings').doc('main').onSnapshot(function(doc){
         if(!doc.exists) return;
         var mine = ++settingsSeq;
         CC.openDoc(doc.data()).then(function(x){
@@ -243,10 +243,10 @@
     var flag = 'cem_db_merged_' + dbUser.uid;
     if(!force && localStorage.getItem(flag)) return Promise.resolve(0);
     return Promise.all([
-      db.collection('customers').get(),
-      db.collection('products').get(),
-      db.collection('transports').get(),
-      db.collection('settings').doc('main').get()
+      Relay.coll('customers').get(),
+      Relay.coll('products').get(),
+      Relay.coll('transports').get(),
+      Relay.coll('settings').doc('main').get()
     ]).then(function(res){
       // opened first, so names can be compared when the data is encrypted
       return Promise.all(res.slice(0, 3).map(function(snap){
@@ -288,16 +288,13 @@
       return;
     }
     try{
-      if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
-      db = firebase.firestore();
-      // keeps working offline; queued saves upload when the connection returns
-      db.enablePersistence({synchronizeTabs: true}).catch(function(){});
+      db = Relay.init(FIREBASE_CONFIG);
     }catch(err){
       dbSetStatus('⚠ Firebase config problem: ' + escapeHtml(err.message));
       return;
     }
     dbSetStatus('Connecting to database…');
-    firebase.auth().onAuthStateChanged(function(user){
+    Relay.auth().onAuthStateChanged(function(user){
       dbUser = user;
       if(dbDeviceStop){ dbDeviceStop(); dbDeviceStop = null; }
       if(user) dbDeviceStop = dbDevice(user);
@@ -315,7 +312,7 @@
       // whether the data is encrypted is read first; while this device doesn't have
       // the passphrase, nothing is read or saved
       if(dbCryptoUnsub) dbCryptoUnsub();
-      dbCryptoUnsub = db.collection('settings').doc('crypto').onSnapshot(function(doc){
+      dbCryptoUnsub = Relay.coll('settings').doc('crypto').onSnapshot(function(doc){
         CC.setConfig(doc.exists ? doc.data() : null).then(dbCryptoCheck);
       }, dbReadError);
     });
@@ -343,10 +340,10 @@
   }
   function dbWipeDevice(){
     try{ localStorage.setItem('cem_wipe', '1'); }catch(e){}
-    firebase.auth().signOut().catch(function(){}).then(function(){ location.reload(); });
+    Relay.auth().signOut().catch(function(){}).then(function(){ location.reload(); });
   }
   function dbDevice(user){
-    var me = dbDeviceId(), ref = db.collection('devices').doc(me.id);
+    var me = dbDeviceId(), ref = Relay.coll('devices').doc(me.id);
     var app = window.chittamDesktop ? 'Windows app' : (document.referrer.indexOf('android-app://') === 0 || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) ? 'Installed app' : 'Browser';
     function beat(){
       ref.set({label: dbDeviceLabel(), app: app + ' (old)', version: (typeof APP_VERSION !== 'undefined' ? APP_VERSION : ''), email: user.email || '',
@@ -404,7 +401,7 @@
     var pass = document.getElementById('auth-password').value;
     var errEl = document.getElementById('auth-error');
     errEl.textContent = '';
-    firebase.auth().signInWithEmailAndPassword(email, pass).catch(function(err){
+    Relay.auth().signInWithEmailAndPassword(email, pass).catch(function(err){
       errEl.textContent = /invalid|wrong|not-found|credential/i.test(err.code || '') ? 'Wrong email or password.' : err.message;
     });
   });
@@ -412,12 +409,12 @@
   document.addEventListener('click', function(e){
     if(e.target.matches('[data-db-signout]')){
       e.preventDefault();
-      if(!dbReady()){ firebase.auth().signOut(); return; }
+      if(!dbReady()){ Relay.auth().signOut(); return; }
       // write the sign-out entry first — once signed out the rules refuse writes
       (CC.isLocked() ? Promise.reject() : dbSeal('activity', {collection: 'app', action: 'sign-out', name: dbUser.email, details: {}, at: dbNow(), by: dbUser.email}))
-        .then(function(d){ return db.collection('activity').add(d); })
+        .then(function(d){ return Relay.coll('activity').add(d); })
         .catch(function(){})
-        .then(function(){ firebase.auth().signOut(); });
+        .then(function(){ Relay.auth().signOut(); });
     }
   });
 
