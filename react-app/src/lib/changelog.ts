@@ -4,6 +4,15 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.44", date: "2026-11-27", title: "A dashboard with the day's picture", windows: "3.9",
+    items: [
+      "Home now opens with figures and charts: owed to you, overdue, parties owing and payments in the last 30 days (with the change against the 30 days before) — the same figures as the List of receivables.",
+      "Open bills by age (0–30, 31–60, 61–90, over 90 days) from Tally, and “Who to chase”: the biggest overdue amounts, each with Ledger and Remind.",
+      "Payments recorded in the app day by day for the last 30 days (hover a day for its total), open orders and service jobs by status (with jobs waiting over 7 days), and whether the Tally figures are up to date.",
+      "Every card links to the page behind it. Windows app 3.9: automatic daily Tally backup (tray → Tally backup…).",
+    ],
+  },
+  {
     version: "3.43", date: "2026-11-27", title: "Devices signed in, and log one out",
     items: [
       "New page Settings → Devices signed in: every phone, PC and Windows app using Chittam, with its login, app, version and when it was last seen. “This device” is marked; give each a name (e.g. Raju's phone).",
