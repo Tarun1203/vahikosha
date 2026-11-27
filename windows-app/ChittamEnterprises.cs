@@ -71,8 +71,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyProduct("Chittam Enterprises")]
 [assembly: System.Reflection.AssemblyCompany("Chittam Enterprises")]
 // keep in step with Program.DesktopVersion (build.ps1 checks)
-[assembly: System.Reflection.AssemblyVersion("3.8.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("3.8")]
+[assembly: System.Reflection.AssemblyVersion("3.9.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("3.9")]
 
 namespace ChittamEnterprises
 {
@@ -82,7 +82,7 @@ namespace ChittamEnterprises
         public const string ClassicUrl = "https://tarun1203.github.io/Chittamenterprises/";
         // where new versions of this program are published (desktop/ folder of the site)
         public const string UpdateUrl = "https://tarun1203.github.io/Chittamenterprises/desktop/version.json";
-        public const string DesktopVersion = "3.8";
+        public const string DesktopVersion = "3.9";
 
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
@@ -237,6 +237,7 @@ namespace ChittamEnterprises
 
     // ------------------------------------------------------------------ settings
     class ExtraCompany { public string Key = ""; public string Label = ""; public string Company = ""; public string SyncFrom = ""; }
+    class BackupFolder { public string Path = ""; public string Label = ""; }
 
     class Settings
     {
@@ -303,6 +304,15 @@ namespace ChittamEnterprises
         public Dictionary<string, string> LastStatus = new Dictionary<string, string>();
         // app payments already posted to Tally: "receiptId|Tally company" -> when and how much
         public Dictionary<string, string> Posted = new Dictionary<string, string>();
+        // Tally backup (Tally Sync settings → Tally backup…)
+        public bool BackupOn = false;
+        public string BackupTime = "21:00";
+        public string BackupPath = "";
+        public bool BackupSynced = true;
+        public List<BackupFolder> BackupFolders = new List<BackupFolder>();
+        public Dictionary<string, string> BackupKnownPaths = new Dictionary<string, string>();   // Tally company -> its data folder
+        public Dictionary<string, string> BackupStatus = new Dictionary<string, string>();       // folder -> last result
+        public string BackupLastRun = "";
 
         public static string Folder
         {
@@ -435,6 +445,24 @@ namespace ChittamEnterprises
                 if (!string.IsNullOrEmpty(n) && !list.Contains(n)) list.Add(n);
             }
             return list;
+        }
+
+        // every company open in Tally -> its data folder
+        public static Dictionary<string, string> CompanyFolders(string url)
+        {
+            var xml = Post(url, "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>ChittamCmpFolders</ID></HEADER>" +
+                "<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES><TDL><TDLMESSAGE>" +
+                "<COLLECTION NAME=\"ChittamCmpFolders\" ISMODIFY=\"No\"><TYPE>Company</TYPE><FETCH>Name, Destination</FETCH></COLLECTION>" +
+                "</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>");
+            var doc = new XmlDocument();
+            doc.LoadXml(xml);
+            var map = new Dictionary<string, string>();
+            foreach (XmlElement e in doc.SelectNodes("//COMPANY"))
+            {
+                var n = e.GetAttribute("NAME"); var d = e.SelectSingleNode("DESTINATION");
+                if (!string.IsNullOrEmpty(n) && d != null && d.InnerText.Trim().Length > 0) map[n] = d.InnerText.Trim();
+            }
+            return map;
         }
 
         static double Num(string s)
@@ -1361,6 +1389,12 @@ namespace ChittamEnterprises
                 { "name", Str(party) }, { "company", Str(company) }, { "amount", Dbl(amount) }, { "into", Str(into) }, { "date", Str(date) }, { "receiptId", Str(receiptId) } });
         }
 
+        public static void LogBackup(Settings s, string token, int companies, int files, long bytes, bool manual)
+        {
+            Log(s, token, "tally-backup", "Tally backup", new Dictionary<string, object> { { "name", Str("Tally backup") }, { "companies", Int(companies) },
+                { "files", Int(files) }, { "mb", Dbl(Math.Round(bytes / 1048576.0, 1)) }, { "manual", new Dictionary<string, object> { { "booleanValue", manual } } } });
+        }
+
         public static void LogAliases(Settings s, string token, int ok, int failed)
         {
             Log(s, token, "tally-party-codes-written", "Party codes", new Dictionary<string, object> { { "name", Str("Party codes") }, { "ledgers", Int(ok) }, { "failed", Int(failed) } });
@@ -2039,6 +2073,493 @@ namespace ChittamEnterprises
         }
     }
 
+    // ------------------------------------------------------------------ Tally backup
+    // Copies Tally's company data folders to a folder the user picks, as dated
+    // snapshots: <backup folder>\<company (folder no.)>\<yyyy-MM-dd HHmm>\.
+    // Every snapshot is a complete copy that can be restored on its own, but only
+    // files that changed since the last one take space: unchanged files are hard
+    // links to the earlier copy (drives that can't hard-link, e.g. FAT32 USB sticks,
+    // get a full copy). Nothing changed: no new snapshot. If Tally writes to a
+    // company while it is being copied, that copy is thrown away and tried again
+    // later. Snapshots are read-only and never deleted.
+    static class TallyBackup
+    {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
+        public static volatile bool Busy;
+        // a run that found a company busy (or failed) tries again after this; also waits a few minutes after start-up
+        public static DateTime NextTry = DateTime.Now.AddMinutes(3);
+        static readonly Regex SnapName = new Regex(@"^\d{4}-\d{2}-\d{2} \d{4}(-\d+)?$");
+
+        class Rec { public string P = ""; public long Size; public long Mtime; public string Sha = ""; public bool Linked; }
+
+        static List<Rec> Scan(string dir)
+        {
+            var root = Path.GetFullPath(dir).TrimEnd('\\') + "\\";
+            return Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .Select(f => { var fi = new FileInfo(f); return new Rec { P = f.Substring(root.Length), Size = fi.Length, Mtime = fi.LastWriteTimeUtc.Ticks }; })
+                .OrderBy(r => r.P, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        static bool Same(List<Rec> a, List<Rec> b)
+        {
+            if (a.Count != b.Count) return false;
+            for (int i = 0; i < a.Count; i++)
+                if (!a[i].P.Equals(b[i].P, StringComparison.OrdinalIgnoreCase) || a[i].Size != b[i].Size || a[i].Mtime != b[i].Mtime) return false;
+            return true;
+        }
+        // the newest finished snapshot of a company (null = none yet)
+        static string Latest(string companyDir)
+        {
+            if (!Directory.Exists(companyDir)) return null;
+            return Directory.GetDirectories(companyDir).Where(d => SnapName.IsMatch(Path.GetFileName(d)) && File.Exists(Path.Combine(d, "manifest.json")))
+                .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal).FirstOrDefault();
+        }
+        static Dictionary<string, Rec> ReadManifest(string snap)
+        {
+            var map = new Dictionary<string, Rec>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var m = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(snap, "manifest.json")));
+                foreach (Dictionary<string, object> f in (System.Collections.ArrayList)m["files"])
+                {
+                    var r = new Rec { P = Convert.ToString(f["p"]), Size = Convert.ToInt64(f["size"]), Mtime = Convert.ToInt64(f["mtime"]), Sha = Convert.ToString(f["sha256"]) };
+                    map[r.P] = r;
+                }
+            }
+            catch { map.Clear(); }
+            return map;
+        }
+        static string CopyWithHash(string src, string dst, long mtime)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dst));
+            string hex;
+            using (var sha = SHA256.Create())
+            {
+                using (var i = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16))
+                using (var o = new FileStream(dst, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16))
+                {
+                    var buf = new byte[1 << 16]; int n;
+                    while ((n = i.Read(buf, 0, buf.Length)) > 0) { sha.TransformBlock(buf, 0, n, null, 0); o.Write(buf, 0, n); }
+                    sha.TransformFinalBlock(buf, 0, 0);
+                }
+                hex = BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant();
+            }
+            File.SetLastWriteTimeUtc(dst, new DateTime(mtime, DateTimeKind.Utc));
+            return hex;
+        }
+        static void Protect(string dir)
+        {
+            foreach (var f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                if (!Path.GetFileName(f).Equals("manifest.json", StringComparison.OrdinalIgnoreCase))
+                    try { File.SetAttributes(f, File.GetAttributes(f) | FileAttributes.ReadOnly); } catch { }
+        }
+        // an unfinished copy of ours: removed. Its hard links share the read-only flag with
+        // the earlier snapshot, so that one is protected again afterwards.
+        static void RemoveStaging(string staging, string prev)
+        {
+            if (!Directory.Exists(staging)) return;
+            foreach (var f in Directory.GetFiles(staging, "*", SearchOption.AllDirectories))
+                try { File.SetAttributes(f, FileAttributes.Normal); File.Delete(f); } catch { }
+            try { Directory.Delete(staging, true); } catch { }
+            if (prev != null) Protect(prev);
+        }
+        static string Safe(string name) { return Regex.Replace(name, @"[\\/:*?""<>|\x00-\x1f]+", " ").Trim().TrimEnd('.'); }
+        public static string MB(long bytes) { return (bytes / 1048576.0).ToString(bytes < 10 * 1048576 ? "0.0" : "0", CultureInfo.InvariantCulture) + " MB"; }
+        public static bool Inside(string a, string b)
+        {
+            try
+            {
+                string x = Path.GetFullPath(a).TrimEnd('\\') + "\\", y = Path.GetFullPath(b).TrimEnd('\\') + "\\";
+                return x.StartsWith(y, StringComparison.OrdinalIgnoreCase) || y.StartsWith(x, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        // one company folder -> a new snapshot (or none, when nothing changed)
+        public static string BackupOne(string src, string label, string root, out bool made, out int copied, out long bytes)
+        {
+            made = false; copied = 0; bytes = 0;
+            if (!Directory.Exists(src)) return "folder not found: " + src;
+            var folderNo = Path.GetFileName(src.TrimEnd('\\'));
+            var cdir = Path.Combine(root, Safe(label.Length > 0 && label != folderNo ? label + " (" + folderNo + ")" : folderNo));
+            Directory.CreateDirectory(cdir);
+            var prev = Latest(cdir);
+            var prevFiles = prev == null ? new Dictionary<string, Rec>(StringComparer.OrdinalIgnoreCase) : ReadManifest(prev);
+            var before = Scan(src);
+            if (before.Count == 0) return "no files in " + src;
+            Rec p;
+            Func<Rec, bool> unchanged = f => prevFiles.TryGetValue(f.P, out p) && p.Size == f.Size && p.Mtime == f.Mtime;
+            if (prev != null && before.Count == prevFiles.Count && before.All(unchanged)) return "no change";
+            var staging = Path.Combine(cdir, "_staging");
+            RemoveStaging(staging, prev);
+            bool linksOk = true;
+            try
+            {
+                Directory.CreateDirectory(staging);
+                foreach (var f in before)
+                {
+                    var dst = Path.Combine(staging, f.P);
+                    if (prev != null && prevFiles.TryGetValue(f.P, out p) && p.Size == f.Size && p.Mtime == f.Mtime && File.Exists(Path.Combine(prev, f.P)))
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                        f.Sha = p.Sha;
+                        if (CreateHardLink(dst, Path.Combine(prev, f.P), IntPtr.Zero)) { f.Linked = true; continue; }
+                        linksOk = false;
+                        File.Copy(Path.Combine(prev, f.P), dst);
+                        continue;
+                    }
+                    f.Sha = CopyWithHash(Path.Combine(src, f.P), dst, f.Mtime);
+                    copied++; bytes += f.Size;
+                }
+                // Tally wrote to it meanwhile: this copy may not open, so it is not kept
+                if (!Same(before, Scan(src))) { RemoveStaging(staging, prev); return "busy (Tally changed it during the copy), will try again"; }
+                var manifest = new Dictionary<string, object> {
+                    { "source", src }, { "label", label }, { "at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") }, { "app", "Chittam Enterprises " + Program.DesktopVersion },
+                    { "files", before.Select(f => new Dictionary<string, object> { { "p", f.P }, { "size", f.Size }, { "mtime", f.Mtime }, { "sha256", f.Sha }, { "linked", f.Linked } }).ToList() } };
+                File.WriteAllText(Path.Combine(staging, "manifest.json"), new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Serialize(manifest), new UTF8Encoding(false));
+                Protect(staging);
+                var snap = Path.Combine(cdir, DateTime.Now.ToString("yyyy-MM-dd HHmm"));
+                for (int i = 2; Directory.Exists(snap); i++) snap = Path.Combine(cdir, DateTime.Now.ToString("yyyy-MM-dd HHmm") + "-" + i);
+                Directory.Move(staging, snap);
+                made = true;
+                return "saved " + Path.GetFileName(snap) + ": " + copied + " changed file" + (copied == 1 ? "" : "s") + " (" + MB(bytes) + ")" +
+                    (linksOk ? "" : " — this drive can't hard-link, so unchanged files were copied too");
+            }
+            catch (Exception ex) { RemoveStaging(staging, prev); return "failed: " + ex.Message; }
+        }
+
+        // the Tally data folder (where the company folders are)
+        public static string DataRoot(Settings s)
+        {
+            var parents = (s.BackupKnownPaths ?? new Dictionary<string, string>()).Values.Select(v => { try { return Path.GetDirectoryName(v.TrimEnd('\\')); } catch { return null; } })
+                .Where(v => !string.IsNullOrEmpty(v)).GroupBy(v => v, StringComparer.OrdinalIgnoreCase).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+            if (parents != null) return parents;
+            try
+            {
+                foreach (var pr in Process.GetProcessesByName("tally"))
+                {
+                    var ini = Path.Combine(Path.GetDirectoryName(pr.MainModule.FileName), "tally.ini");
+                    if (!File.Exists(ini)) continue;
+                    var m = File.ReadAllLines(ini).Select(l => Regex.Match(l, @"^\s*Data\s*=\s*(.+?)\s*$", RegexOptions.IgnoreCase)).FirstOrDefault(x => x.Success);
+                    if (m != null) return m.Groups[1].Value;
+                }
+            }
+            catch { }
+            return "";
+        }
+
+        // the synced companies' folders: [folder, Tally company], asked from Tally (or the ones found last time)
+        public static List<string[]> SyncedTargets(Settings s, out string note)
+        {
+            note = "";
+            var list = new List<string[]>();
+            if (s.BackupKnownPaths == null) s.BackupKnownPaths = new Dictionary<string, string>();
+            try { foreach (var kv in Tally.CompanyFolders(s.TallyUrl)) s.BackupKnownPaths[kv.Key] = kv.Value; }
+            catch (Exception ex) { note = "Tally isn't reachable (" + ex.Message + "), so the folders found last time are used. "; }
+            foreach (var c in s.AllCompanies())
+            {
+                if (string.IsNullOrEmpty(c[1])) continue;
+                string path;
+                if (s.BackupKnownPaths.TryGetValue(c[1], out path)) { if (!list.Any(x => x[0].Equals(path, StringComparison.OrdinalIgnoreCase))) list.Add(new[] { path, c[1] }); }
+                else note += c[1] + ": its folder isn't known yet (open it in Tally once). ";
+            }
+            return list;
+        }
+
+        // what to back up: [folder, name]
+        public static List<string[]> Targets(Settings s, out string note)
+        {
+            note = "";
+            var list = s.BackupSynced ? SyncedTargets(s, out note) : new List<string[]>();
+            foreach (var x in s.BackupFolders ?? new List<BackupFolder>())
+                if (x.Path.Length > 0 && !list.Any(y => y[0].Equals(x.Path, StringComparison.OrdinalIgnoreCase))) list.Add(new[] { x.Path, x.Label });
+            return list;
+        }
+
+        public static bool Due(Settings s)
+        {
+            if (!s.BackupOn || string.IsNullOrEmpty(s.BackupPath) || Busy || DateTime.Now < NextTry) return false;
+            TimeSpan t;
+            if (!TimeSpan.TryParseExact(s.BackupTime ?? "", @"hh\:mm", CultureInfo.InvariantCulture, out t)) t = new TimeSpan(21, 0, 0);
+            var due = DateTime.Today + t;
+            if (DateTime.Now < due) due = due.AddDays(-1);   // not yet today: yesterday's (missed if the PC was off)
+            DateTime last;
+            return !DateTime.TryParseExact(s.BackupLastRun ?? "", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out last) || last < due;
+        }
+
+        static void WriteReadme(string root)
+        {
+            var path = Path.Combine(root, "README - how to restore.txt");
+            if (File.Exists(path)) return;
+            File.WriteAllText(path,
+                "Tally backup by Chittam Enterprises\r\n\r\n" +
+                "Each company has a folder; inside, one folder per backup, named by date and time\r\n" +
+                "(yyyy-mm-dd hhmm). Every one of them is a complete copy of that company's Tally data.\r\n" +
+                "Unchanged files are shared between backups (hard links), so they take space only once.\r\n\r\n" +
+                "To restore a company:\r\n" +
+                "  1. Close Tally.\r\n" +
+                "  2. Copy the backup folder you want (e.g. \"2026-11-27 2100\") to a NEW folder inside\r\n" +
+                "     Tally's data folder, named with an unused company number (e.g. 100099).\r\n" +
+                "  3. Clear the read-only flag on the copied files (folder Properties).\r\n" +
+                "  4. Open Tally and load that company.\r\n\r\n" +
+                "Never open a backup folder directly in Tally, and don't delete files from here by hand:\r\n" +
+                "files are shared between backups.\r\n", new UTF8Encoding(false));
+        }
+
+        // a whole run: every chosen company; logged here and in the app's History
+        public static string RunAll(SyncEngine sync, bool manual)
+        {
+            if (Busy) return "A backup is already running.";
+            Busy = true;
+            var s = sync.Settings;
+            try
+            {
+                var root = s.BackupPath ?? "";
+                if (root.Length == 0) return "Choose a backup folder first.";
+                Directory.CreateDirectory(root);
+                WriteReadme(root);
+                string note;
+                var targets = Targets(s, out note);
+                if (note.Length > 0) sync.Log("Tally backup: " + note.Trim());
+                if (targets.Count == 0) return "Nothing chosen to back up.";
+                if (s.BackupStatus == null) s.BackupStatus = new Dictionary<string, string>();
+                int made = 0, files = 0, retry = 0; long bytes = 0;
+                foreach (var t in targets)
+                {
+                    string r; bool m = false; int c = 0; long b = 0;
+                    if (Inside(root, t[0])) r = "skipped: the backup folder is inside this company's folder (or the other way round)";
+                    else r = BackupOne(t[0], t[1], root, out m, out c, out b);
+                    if (r.StartsWith("busy") || r.StartsWith("failed")) retry++;
+                    if (m) { made++; files += c; bytes += b; }
+                    s.BackupStatus[t[0]] = DateTime.Now.ToString("dd MMM h:mm tt") + " · " + r;
+                    sync.Log("Tally backup [" + (t[1].Length > 0 ? t[1] : t[0]) + "] " + r);
+                }
+                string free = "";
+                try { var d = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(root))); if (d.AvailableFreeSpace < 2L * 1024 * 1024 * 1024) free = " Only " + MB(d.AvailableFreeSpace) + " free on the backup drive."; } catch { }
+                if (free.Length > 0) sync.Log("Tally backup:" + free);
+                // all done (or nothing changed): today's backup is finished; otherwise try again in 30 minutes
+                if (retry == 0) s.BackupLastRun = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+                else NextTry = DateTime.Now.AddMinutes(30);
+                s.Save();
+                if (made > 0)
+                    try { Firebase.LogBackup(s, Firebase.SignIn(s), made, files, bytes, manual); } catch { }
+                return (made == 0 ? "No new backup: nothing changed." : made + " compan" + (made == 1 ? "y" : "ies") + " backed up, " + files + " changed file" + (files == 1 ? "" : "s") + " (" + MB(bytes) + ").") +
+                    (retry > 0 ? " " + retry + " will be tried again in 30 minutes." : "") + free;
+            }
+            catch (Exception ex) { sync.Log("Tally backup failed: " + ex.Message); NextTry = DateTime.Now.AddMinutes(30); return "Backup failed: " + ex.Message; }
+            finally { Busy = false; }
+        }
+    }
+
+    // Tally backup settings: where, when, and which companies (the synced ones, and others)
+    class BackupForm : Form
+    {
+        readonly SyncEngine sync;
+        readonly CheckBox chkOn, chkSynced;
+        readonly TextBox txtTime, txtPath, txtStatus;
+        readonly Label lblSynced, lblWarn;
+        readonly DataGridView grid;
+        readonly Button btnNow;
+
+        public BackupForm(SyncEngine sync, Icon icon)
+        {
+            this.sync = sync;
+            var s = sync.Settings;
+            if (s.BackupFolders == null) s.BackupFolders = new List<BackupFolder>();
+            if (s.BackupKnownPaths == null) s.BackupKnownPaths = new Dictionary<string, string>();
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Text = "Tally backup — Chittam Enterprises";
+            Icon = icon;
+            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(760, 640);
+            BackColor = Color.White;
+            Font = Look.UI(9.5f);
+
+            Controls.Add(new Label { Text = "Tally backup", Left = 20, Top = 14, AutoSize = true, Font = Look.UI(15f, FontStyle.Bold) });
+            Controls.Add(new Label { Text = "Copies Tally's company data to a folder you choose. Each backup is a complete copy; only changed files take new space.\r\nBackups are kept, never deleted. Best on another drive — a USB or external disk.",
+                Left = 20, Top = 48, Width = 730, Height = 44, ForeColor = Look.Soft });
+
+            chkOn = new CheckBox { Text = "Back up automatically every day at", Left = 20, Top = 100, AutoSize = true, Checked = s.BackupOn };
+            Controls.Add(chkOn);
+            txtTime = new TextBox { Left = 262, Top = 98, Width = 56, Text = string.IsNullOrEmpty(s.BackupTime) ? "21:00" : s.BackupTime };
+            Controls.Add(txtTime);
+            Controls.Add(new Label { Text = "(24-hour, hh:mm). If the PC is off then, it runs when the app next starts.", Left = 326, Top = 101, AutoSize = true, ForeColor = Look.Soft });
+
+            Controls.Add(new Label { Text = "Backup folder", Left = 20, Top = 140, AutoSize = true, Font = Look.UI(9.5f, FontStyle.Bold) });
+            txtPath = new TextBox { Left = 20, Top = 162, Width = 600, Text = s.BackupPath ?? "" };
+            Controls.Add(txtPath);
+            var btnBrowse = new Button { Text = "Choose…", Left = 628, Top = 160, Width = 112, Height = 28 };
+            btnBrowse.Click += delegate {
+                using (var d = new FolderBrowserDialog { Description = "Where should the Tally backups go?", ShowNewFolderButton = true, SelectedPath = txtPath.Text })
+                    if (d.ShowDialog(this) == DialogResult.OK) { txtPath.Text = d.SelectedPath; CheckPath(); }
+            };
+            Controls.Add(btnBrowse);
+            lblWarn = new Label { Left = 20, Top = 192, Width = 720, Height = 20, ForeColor = Color.Firebrick };
+            Controls.Add(lblWarn);
+            txtPath.Leave += delegate { CheckPath(); };
+
+            chkSynced = new CheckBox { Text = "Synced companies (the ones in Tally Sync settings)", Left = 20, Top = 218, AutoSize = true, Checked = s.BackupSynced, Font = Look.UI(9.5f, FontStyle.Bold) };
+            Controls.Add(chkSynced);
+            lblSynced = new Label { Left = 40, Top = 242, Width = 700, Height = 20, ForeColor = Look.Soft };
+            Controls.Add(lblSynced);
+
+            Controls.Add(new Label { Text = "Other companies (not synced) — tick to back up too", Left = 20, Top = 270, AutoSize = true, Font = Look.UI(9.5f, FontStyle.Bold) });
+            grid = new DataGridView {
+                Left = 20, Top = 292, Width = 720, Height = 170, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle,
+                SelectionMode = DataGridViewSelectionMode.CellSelect, EditMode = DataGridViewEditMode.EditOnEnter
+            };
+            grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "On", HeaderText = "Back up", FillWeight = 12 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Path", Visible = false });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Folder", HeaderText = "Folder", FillWeight = 22, ReadOnly = true });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Changed", HeaderText = "Last changed", FillWeight = 18, ReadOnly = true });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Size", HeaderText = "Size", FillWeight = 10, ReadOnly = true });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Label", HeaderText = "Name (your label)", FillWeight = 48 });
+            grid.DataError += delegate (object o, DataGridViewDataErrorEventArgs e) { e.ThrowException = false; };
+            Controls.Add(grid);
+            var btnAdd = new Button { Text = "Add a folder…", Left = 20, Top = 468, Width = 130, Height = 28 };
+            btnAdd.Click += delegate {
+                using (var d = new FolderBrowserDialog { Description = "A Tally company folder (the one with Company.1800 in it)", ShowNewFolderButton = false })
+                    if (d.ShowDialog(this) == DialogResult.OK)
+                    {
+                        if (!File.Exists(Path.Combine(d.SelectedPath, "Company.1800")) && !Directory.GetFiles(d.SelectedPath, "Company.*").Any())
+                        { MessageBox.Show(this, "That folder doesn't look like a Tally company (no Company file in it).", "Tally backup"); return; }
+                        AddRow(d.SelectedPath, true, "");
+                    }
+            };
+            Controls.Add(btnAdd);
+            Controls.Add(new Label { Text = "Tally names only the companies open in it, so give the others a name you'll recognise.", Left = 160, Top = 474, AutoSize = true, ForeColor = Look.Soft });
+
+            txtStatus = new TextBox { Left = 20, Top = 504, Width = 720, Height = 80, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Look.Page, BorderStyle = BorderStyle.FixedSingle };
+            Controls.Add(txtStatus);
+
+            btnNow = new Button { Text = "Back up now", Left = 20, Top = 596, Width = 130, Height = 32 };
+            btnNow.Click += delegate { RunNow(); };
+            Controls.Add(btnNow);
+            var btnOpen = new Button { Text = "Open backup folder", Left = 158, Top = 596, Width = 150, Height = 32 };
+            btnOpen.Click += delegate {
+                var p = txtPath.Text.Trim();
+                if (p.Length > 0 && Directory.Exists(p)) Process.Start("explorer.exe", "\"" + p + "\"");
+                else MessageBox.Show(this, "No backups there yet.", "Tally backup");
+            };
+            Controls.Add(btnOpen);
+            var ok = new Button { Text = "Save", Left = 540, Top = 596, Width = 96, Height = 32 };
+            var cancel = new Button { Text = "Close", Left = 644, Top = 596, Width = 96, Height = 32, DialogResult = DialogResult.Cancel };
+            ok.Click += delegate { if (SaveAll(true)) Close(); };
+            Controls.Add(ok); Controls.Add(cancel);
+            CancelButton = cancel;
+
+            Shown += delegate { LoadFolders(); };
+        }
+
+        void AddRow(string path, bool on, string label)
+        {
+            foreach (DataGridViewRow r in grid.Rows) if (Convert.ToString(r.Cells["Path"].Value).Equals(path, StringComparison.OrdinalIgnoreCase)) { r.Cells["On"].Value = true; return; }
+            string changed = "", size = "";
+            try
+            {
+                var files = new DirectoryInfo(path).GetFiles("*", SearchOption.AllDirectories);
+                if (files.Length > 0) changed = files.Max(f => f.LastWriteTime).ToString("dd-MM-yyyy");
+                size = TallyBackup.MB(files.Sum(f => f.Length));
+            }
+            catch { changed = "can't read"; }
+            // open in Tally (but not synced): Tally knows its name
+            if (label.Length == 0)
+                label = (sync.Settings.BackupKnownPaths ?? new Dictionary<string, string>()).Where(kv => kv.Value.Equals(path, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Key).FirstOrDefault() ?? "";
+            int i = grid.Rows.Add(on, path, Path.GetFileName(path.TrimEnd('\\')), changed, size, label);
+            grid.Rows[i].Cells["Folder"].ToolTipText = path;
+        }
+
+        // synced companies' folders from Tally, then every other company folder in Tally's data folder
+        void LoadFolders()
+        {
+            var s = sync.Settings;
+            Cursor = Cursors.WaitCursor;
+            string note;
+            var synced = new List<string[]>();
+            try { synced = TallyBackup.SyncedTargets(s, out note); } catch (Exception ex) { note = ex.Message; }
+            lblSynced.Text = synced.Count == 0 ? "None found — " + note : string.Join(" · ", synced.Select(x => x[1] + " (" + Path.GetFileName(x[0].TrimEnd('\\')) + ")"));
+            var syncedPaths = new HashSet<string>(synced.Select(x => x[0]), StringComparer.OrdinalIgnoreCase);
+            foreach (var x in s.BackupFolders) AddRow(x.Path, true, x.Label);
+            var root = TallyBackup.DataRoot(s);
+            if (root.Length > 0 && Directory.Exists(root))
+                foreach (var d in Directory.GetDirectories(root).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+                    if (!syncedPaths.Contains(d) && Directory.GetFiles(d, "Company.*").Any()) AddRow(d, false, "");
+            Cursor = Cursors.Default;
+            ShowStatus();
+            CheckPath();
+        }
+
+        void ShowStatus()
+        {
+            var s = sync.Settings;
+            var lines = new List<string>();
+            lines.Add(string.IsNullOrEmpty(s.BackupLastRun) ? "No backup yet." : "Last finished: " + s.BackupLastRun);
+            foreach (var kv in s.BackupStatus ?? new Dictionary<string, string>()) lines.Add(Path.GetFileName(kv.Key.TrimEnd('\\')) + ": " + kv.Value);
+            txtStatus.Text = string.Join("\r\n", lines);
+        }
+
+        // the backup folder must not be inside a company folder (or hold one); warn about Tally's own drive
+        string PathProblem(string p, out string warn)
+        {
+            warn = "";
+            if (p.Length == 0) return "";
+            if (!Path.IsPathRooted(p)) return "Give the full folder, e.g. E:\\Tally backup.";
+            var root = TallyBackup.DataRoot(sync.Settings);
+            if (root.Length > 0 && TallyBackup.Inside(p, root)) return "That is inside Tally's data folder (or holds it). Choose a folder somewhere else.";
+            foreach (DataGridViewRow r in grid.Rows) if (TallyBackup.Inside(p, Convert.ToString(r.Cells["Path"].Value))) return "That is inside a company folder. Choose a folder somewhere else.";
+            try
+            {
+                if (root.Length > 0 && Path.GetPathRoot(Path.GetFullPath(p)).Equals(Path.GetPathRoot(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase))
+                    warn = "Same drive as Tally's data (" + Path.GetPathRoot(root) + ") — if that drive fails, the backup goes with it. Another drive or a USB disk is safer.";
+            }
+            catch { }
+            return "";
+        }
+        void CheckPath() { string warn; var err = PathProblem(txtPath.Text.Trim(), out warn); lblWarn.Text = err.Length > 0 ? err : warn; }
+
+        bool SaveAll(bool showErrors)
+        {
+            grid.EndEdit();
+            var s = sync.Settings;
+            var path = txtPath.Text.Trim();
+            string warn;
+            var err = PathProblem(path, out warn);
+            TimeSpan t;
+            if (!TimeSpan.TryParseExact(txtTime.Text.Trim(), @"hh\:mm", CultureInfo.InvariantCulture, out t) &&
+                !TimeSpan.TryParseExact(txtTime.Text.Trim(), @"h\:mm", CultureInfo.InvariantCulture, out t)) err = err.Length > 0 ? err : "Time must be like 21:00.";
+            var extra = new List<BackupFolder>();
+            foreach (DataGridViewRow r in grid.Rows)
+                if (Convert.ToBoolean(r.Cells["On"].Value ?? false))
+                    extra.Add(new BackupFolder { Path = Convert.ToString(r.Cells["Path"].Value), Label = Convert.ToString(r.Cells["Label"].Value ?? "").Trim() });
+            if (err.Length == 0 && path.Length == 0 && (chkOn.Checked || extra.Count > 0)) err = "Choose a backup folder first.";
+            if (err.Length > 0) { if (showErrors) MessageBox.Show(this, err, "Tally backup", MessageBoxButtons.OK, MessageBoxIcon.Warning); return false; }
+            s.BackupOn = chkOn.Checked;
+            s.BackupTime = t.ToString(@"hh\:mm");
+            s.BackupPath = path;
+            s.BackupSynced = chkSynced.Checked;
+            s.BackupFolders = extra;
+            s.Save();
+            sync.Log("Tally backup settings: " + (s.BackupOn ? "daily at " + s.BackupTime : "automatic backup off") + ", to " + (path.Length > 0 ? path : "(no folder)") +
+                ", " + (s.BackupSynced ? "synced companies" : "not the synced companies") + (extra.Count > 0 ? " + " + extra.Count + " other folder(s)" : ""));
+            return true;
+        }
+
+        void RunNow()
+        {
+            if (!SaveAll(true)) return;
+            if (TallyBackup.Busy) { MessageBox.Show(this, "A backup is already running.", "Tally backup"); return; }
+            btnNow.Enabled = false; btnNow.Text = "Backing up…";
+            ThreadPool.QueueUserWorkItem(delegate {
+                var r = TallyBackup.RunAll(sync, true);
+                try { BeginInvoke((Action)delegate { btnNow.Enabled = true; btnNow.Text = "Back up now"; ShowStatus(); txtStatus.Text = r + "\r\n\r\n" + txtStatus.Text; }); } catch { }
+            });
+        }
+    }
+
     class SyncSettingsForm : Form
     {
         readonly SyncEngine sync;
@@ -2185,6 +2706,10 @@ namespace ChittamEnterprises
             btnClose.SetBounds(L + 140, 650, 110, 36);
             btnClose.Click += delegate { Close(); };
             Controls.Add(btnClose);
+            var btnBackup = Look.Secondary("Tally backup…");
+            btnBackup.SetBounds(L + 260, 650, 150, 36);
+            btnBackup.Click += delegate { using (var f = new BackupForm(sync, Icon)) f.ShowDialog(this); };
+            Controls.Add(btnBackup);
 
             // ---- right column ----
             int R = 460, RW = 416;
@@ -2417,6 +2942,7 @@ namespace ChittamEnterprises
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Tally sync now", null, delegate { SyncNow(); });
             trayMenu.Items.Add("Tally Sync settings…", null, delegate { ShowWindow(); OpenSyncSettings(); });
+            trayMenu.Items.Add("Tally backup…", null, delegate { ShowWindow(); using (var f = new BackupForm(sync, Icon)) f.ShowDialog(this); });
             miStatus = new ToolStripMenuItem("") { Enabled = false };
             trayMenu.Items.Add(miStatus);
             trayMenu.Items.Add(new ToolStripSeparator());
@@ -2436,6 +2962,8 @@ namespace ChittamEnterprises
             timer = new System.Windows.Forms.Timer { Interval = 15000 };
             timer.Tick += delegate {
                 if (!sync.Busy && sync.Settings.Configured && DateTime.Now >= sync.NextSync) sync.Start(false);
+                // Tally backup: once a day at the chosen time (or at start-up if that was missed)
+                if (TallyBackup.Due(sync.Settings)) ThreadPool.QueueUserWorkItem(delegate { TallyBackup.RunAll(sync, false); });
                 // new version of this program: a minute after start, then every 6 hours
                 if (DateTime.Now >= nextUpdateCheck) { nextUpdateCheck = DateTime.Now.AddHours(6); CheckForUpdate(); }
                 UpdateStatus();
