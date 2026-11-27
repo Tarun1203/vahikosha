@@ -1,7 +1,7 @@
 // The Tally figures the app's pages use, built from the mirror in exactly the
 // shapes the Windows app used to upload to Firebase (balances, tallyVouchers,
 // tallyBills, tallyStock), so no page has to change.
-import type pg from "pg";
+import type { Db } from "./db.ts";
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -18,7 +18,7 @@ const PARTIES = `
   SELECT l.company_id, l.name FROM ledgers l JOIN tree t ON t.company_id = l.company_id AND t.name = l.group_name
   WHERE t.root = 'D' OR l.customer_id IS NOT NULL`;
 
-async function meta(db: pg.Pool) {
+async function meta(db: Db) {
   const r = await db.query(`SELECT c.id, c.label, c.tally_company,
       (SELECT max(finished_at) FROM sync_runs s WHERE s.company_id = c.id AND s.kind = 'mirror' AND s.finished_at IS NOT NULL) AS synced
     FROM companies c`);
@@ -27,12 +27,12 @@ async function meta(db: pg.Pool) {
 
 // while Firebase is live: the Windows app's own uploads, copied from Firebase
 // (every company it syncs, in exactly the shape the pages use); null until copied
-export async function fromCopy(db: pg.Pool, kind: "balances" | "tallyVouchers" | "tallyBills" | "tallyStock") {
+export async function fromCopy(db: Db, kind: "balances" | "tallyVouchers" | "tallyBills" | "tallyStock") {
   const rows = (await db.query("SELECT key, data FROM fb_tally WHERE kind = $1", [kind])).rows as { key: string; data: Record<string, unknown> }[];
   return rows.length ? Object.fromEntries(rows.map((r) => [r.key, r.data])) : null;
 }
 
-export async function balances(db: pg.Pool) {
+export async function balances(db: Db) {
   const m = await meta(db);
   const rows = (await db.query(`WITH p AS (${PARTIES})
     SELECT c.company_id, c.ledger, c.closing FROM ledger_closing c JOIN p ON p.company_id = c.company_id AND p.name = c.ledger
@@ -53,7 +53,7 @@ export async function balances(db: pg.Pool) {
   return out;
 }
 
-export async function vouchers(db: pg.Pool) {
+export async function vouchers(db: Db) {
   const m = await meta(db);
   const rows = (await db.query(`WITH p AS (${PARTIES})
     SELECT v.company_id, v.vdate, v.vtype, v.number, e.ledger, e.amount, v.narration, v.tally_guid,
@@ -76,7 +76,7 @@ export async function vouchers(db: pg.Pool) {
 }
 
 // open bills: the newest copy of Tally's own Bills Receivable report (owed to us only)
-export async function bills(db: pg.Pool) {
+export async function bills(db: Db) {
   const m = await meta(db);
   const snaps = (await db.query("SELECT DISTINCT ON (company_id) company_id, taken_at, bills FROM tally_bill_snapshots ORDER BY company_id, id DESC")).rows as { company_id: string; taken_at: Date; bills: unknown }[];
   const out: Record<string, unknown> = {};
@@ -89,7 +89,7 @@ export async function bills(db: pg.Pool) {
   return out;
 }
 
-export async function stock(db: pg.Pool) {
+export async function stock(db: Db) {
   const m = await meta(db);
   // Tally's own closing quantity when known; otherwise worked out from the vouchers
   const rows = (await db.query(`

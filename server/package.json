@@ -10,7 +10,8 @@
   "scripts": {
     "migrate": "node src/migrate.ts",
     "start": "node src/index.ts",
-    "check": "node src/check.ts"
+    "check": "node src/check.ts",
+    "test": "node --test --test-concurrency=1 test/"
   },
   "dependencies": {
     "fast-xml-parser": "4.5.1",

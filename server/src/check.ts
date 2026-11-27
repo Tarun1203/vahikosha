@@ -1,9 +1,9 @@
 // Proves the database rules work. Everything runs inside one transaction that
 // is always rolled back, so no test data is ever left behind.
 import { loadConfig } from "./config.ts";
-import { pool } from "./db.ts";
+import { CHITTAM_BUSINESS, pool } from "./db.ts";
 
-const p = pool(loadConfig());
+const p = pool(loadConfig(), CHITTAM_BUSINESS);
 const c = await p.connect();
 let failed = 0;
 const ok = (name: string) => console.log("  ok    " + name);

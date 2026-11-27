@@ -22,29 +22,49 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import pg from "pg";
 import { loadConfig } from "./config.ts";
-import { pool, tx } from "./db.ts";
-import { login, logout, sessionUser, type SessionUser } from "./auth.ts";
+import { CHITTAM_BUSINESS, inBusiness, pool } from "./db.ts";
+import { businessesOf, chooseBusiness, login, logout, membership, sessionUser, type SessionUser } from "./auth.ts";
+import { can, COLLECTION_MODULE, MODULE_LABEL, MODULES, permissions, usable, type Module, type Role } from "./roles.ts";
 import * as tally from "./tallyapi.ts";
 import { runMirror } from "./mirror-tally.ts";
 import { copyFromFirebase } from "./firebase-copy.ts";
 
 const cfg = loadConfig();
-const db = pool(cfg);
+// requests: each one says which business it works for (inBusiness), so a
+// request can only ever see the business of the person signed in
+const db = pool(cfg, null);
+// the Tally mirror and the Firebase copy work for Chittam Enterprises only (for now)
+const chittamDb = pool(cfg, CHITTAM_BUSINESS, "vahikosha-chittam-jobs");
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ROLE_LABEL: Record<Role, string> = { owner: "Owner", accountant: "Accountant", staff: "Staff", outside_ca: "Outside CA" };
+
+// which modules a business has on (a module with no row is on)
+async function modulesOf(business: string): Promise<Record<Module, boolean>> {
+  const r = await db.query("SELECT module, enabled FROM business_modules WHERE business_id = $1", [business]);
+  const out = Object.fromEntries(MODULES.map((k) => [k, true])) as Record<Module, boolean>;
+  for (const x of r.rows) out[x.module as Module] = x.enabled;
+  return out;
+}
 const COLLECTIONS = new Set(["customers", "products", "transports", "orders", "services", "receipts", "messages", "settings"]);
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const MIRROR_MINUTES = 15;
 const COPY_MINUTES = 5;
 
 // ---------------------------------------------------------------- live updates
-const listeners = new Set<ServerResponse>();
+// each open stream hears only the changes of its own business
+const listeners = new Map<ServerResponse, string>();
 async function startListening() {
   const client = new pg.Client({ ...cfg.db, application_name: "chittam-server-listen" });
   await client.connect();
   await client.query("LISTEN chittam_changes");
-  client.on("notification", (n) => { for (const res of listeners) res.write("data: " + (n.payload || "{}") + "\n\n"); });
+  client.on("notification", (n) => {
+    let business = "";
+    try { business = JSON.parse(n.payload || "{}").business || ""; } catch { /* not ours */ }
+    for (const [res, b] of listeners) if (b === business) res.write("data: " + (n.payload || "{}") + "\n\n");
+  });
   client.on("error", () => setTimeout(() => startListening().catch(() => {}), 3000));
 }
-const notify = (payload: object) => db.query("SELECT pg_notify('chittam_changes', $1)", [JSON.stringify(payload)]);
+const notify = (payload: object) => chittamDb.query("SELECT pg_notify('chittam_changes', $1)", [JSON.stringify(payload)]);
 
 // ---------------------------------------------------------------- Tally mirror, every 15 minutes
 let mirrorBusy = false, mirrorLast = "";
@@ -53,9 +73,9 @@ async function mirrorNow(reason: string) {
   mirrorBusy = true;
   const lines: string[] = [];
   try {
-    const r = await runMirror(db, undefined, (s) => lines.push(s));
+    const r = await runMirror(chittamDb, undefined, (s) => lines.push(s));
     mirrorLast = new Date().toISOString();
-    if (r.changed) await notify({ collection: "tally" });
+    if (r.changed) await notify({ business: CHITTAM_BUSINESS, collection: "tally" });
     console.log(new Date().toLocaleTimeString("en-IN") + " Tally mirror (" + reason + "): " + (r.changed ? r.changed + " voucher change(s)" : "no change") + (r.bad ? ", " + r.bad + " to check" : ""));
     return { ok: r.bad === 0, changed: r.changed, log: lines };
   } catch (e) {
@@ -68,7 +88,7 @@ async function mirrorNow(reason: string) {
 // (while Firebase is still the live database; CHITTAM_FIREBASE_COPY=off stops it)
 let copyLast = "", copyError = "";
 async function copyNow(reason: string) {
-  const r = await copyFromFirebase(db, (s) => console.log(new Date().toLocaleTimeString("en-IN") + " Firebase copy (" + reason + "): " + s));
+  const r = await copyFromFirebase(chittamDb, (s) => console.log(new Date().toLocaleTimeString("en-IN") + " Firebase copy (" + reason + "): " + s));
   if (r.ok) { copyLast = new Date().toISOString(); copyError = ""; } else if (r.error !== "already running") copyError = r.error || "";
   return r;
 }
@@ -104,7 +124,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const b = (await readBody(req)) as { email?: string; password?: string; device?: string };
     if (!b.email || !b.password) return send(res, 400, { error: "Enter your email and password." });
     const r = await login(db, b.email, b.password, b.device || String(req.headers["user-agent"] || ""));
-    return r ? send(res, 200, r) : send(res, 401, { error: "Wrong email or password." });
+    if (!r) return send(res, 401, { error: "Wrong email or password." });
+    return "error" in r ? send(res, 403, r) : send(res, 200, r);
   }
 
   // ---- everything else: signed in
@@ -113,42 +134,111 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (!me) return send(res, 401, { error: "Please sign in." });
   const user = me.email;
 
-  if (parts[1] === "me" && req.method === "GET") return send(res, 200, me);
+  if (parts[1] === "me" && req.method === "GET") return send(res, 200, { ...me, businesses: me.isSupport ? [] : await businessesOf(db, me.id) });
   if (parts[1] === "logout" && req.method === "POST") { await logout(db, token); return send(res, 200, { ok: true }); }
+
+  // ---- Chittam support: account status only, never business data
+  if (me.isSupport) {
+    if (parts[1] === "support" && parts[2] === "businesses" && req.method === "GET") {
+      const r = await db.query(`SELECT b.id, b.name, b.status, b.created_at,
+          (SELECT count(*)::int FROM members m WHERE m.business_id = b.id AND m.active) AS members
+        FROM businesses b ORDER BY b.name`);
+      return send(res, 200, r.rows.map((x) => ({ id: x.id, name: x.name, status: x.status, createdAt: x.created_at, members: x.members })));
+    }
+    return send(res, 403, { error: "Chittam support can't open business data." });
+  }
+
+  // ---- which business
+  if (parts[1] === "businesses" && req.method === "GET") return send(res, 200, await businessesOf(db, me.id));
+  if (parts[1] === "business" && parts[2] === "select" && req.method === "POST") {
+    const b = (await readBody(req)) as { businessId?: string };
+    const m = UUID.test(String(b.businessId || "")) ? await chooseBusiness(db, token, me, String(b.businessId)) : null;
+    return m ? send(res, 200, { ok: true, businessId: m.businessId, name: m.businessName, role: m.role }) : send(res, 403, { error: "You're not part of that business." });
+  }
+  if (!me.businessId) return send(res, 409, { error: "Choose a business first.", businesses: await businessesOf(db, me.id) });
+  const m = await membership(db, me.id, me.businessId);
+  if (!m || !usable(m)) return send(res, 403, { error: "You no longer have access to this business. Ask the owner." });
+  const biz = m.businessId;
+  const run = <T>(fn: (c: pg.PoolClient) => Promise<T>) => inBusiness(db, biz, fn);
+  const refuse = (what: string) => send(res, 403, { error: "Your role (" + ROLE_LABEL[m.role] + ") can't " + what + "." });
+  const chittamOnly = () => send(res, 400, { error: "This works only for Chittam Enterprises for now. Other businesses get the Tally connector in a later update." });
+  const modules = await modulesOf(biz);
+
+  if (parts[1] === "business" && !parts[2] && req.method === "GET") {
+    return send(res, 200, { id: biz, name: m.businessName, role: m.role, permissions: permissions(m), accountantCanApprove: m.accountantCanApprove, modules });
+  }
+  if (parts[1] === "business" && parts[2] === "modules" && req.method === "PUT") {
+    if (!can(m, "business.manage")) return refuse("switch modules on or off");
+    const b = (await readBody(req)) as Record<string, unknown>;
+    const changes = MODULES.filter((k) => typeof b[k] === "boolean" && b[k] !== modules[k]);
+    for (const k of changes) {
+      await db.query(`INSERT INTO business_modules (business_id, module, enabled, changed_by) VALUES ($1, $2, $3, $4)
+        ON CONFLICT (business_id, module) DO UPDATE SET enabled = EXCLUDED.enabled, changed_by = EXCLUDED.changed_by, changed_at = now()`, [biz, k, b[k], user]);
+      await run((c) => c.query("INSERT INTO activity (by_user, collection, record_id, action, name) VALUES ($1, 'business', $2, $3, $4)",
+        [user, k, b[k] ? "module-on" : "module-off", MODULE_LABEL[k]]));
+    }
+    return send(res, 200, { modules: await modulesOf(biz) });
+  }
+  if (parts[1] === "business" && parts[2] === "approval" && req.method === "PUT") {
+    if (!can(m, "business.manage")) return refuse("change who approves entries");
+    const b = (await readBody(req)) as { accountantCanApprove?: unknown };
+    if (typeof b.accountantCanApprove !== "boolean") return send(res, 400, { error: "accountantCanApprove must be true or false" });
+    await db.query("UPDATE businesses SET accountant_can_approve = $2 WHERE id = $1", [biz, b.accountantCanApprove]);
+    await run((c) => c.query("INSERT INTO activity (by_user, collection, action, name) VALUES ($1, 'business', $2, $3)",
+      [user, b.accountantCanApprove ? "accountant-may-approve" : "only-owner-approves", m.businessName]));
+    return send(res, 200, { accountantCanApprove: b.accountantCanApprove });
+  }
+  if (parts[1] === "business" && parts[2] === "members" && req.method === "GET") {
+    if (!can(m, "team.manage")) return refuse("see the team");
+    const r = await db.query(`SELECT u.email, u.display_name, m.role, m.active, to_char(m.access_from, 'YYYY-MM-DD') AS access_from, to_char(m.access_to, 'YYYY-MM-DD') AS access_to
+      FROM members m JOIN app_users u ON u.id = m.user_id WHERE m.business_id = $1 ORDER BY m.active DESC, u.email`, [biz]);
+    return send(res, 200, r.rows.map((x) => ({ email: x.email, name: x.display_name, role: x.role, active: x.active, accessFrom: x.access_from, accessTo: x.access_to })));
+  }
 
   if (parts[1] === "events" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
     res.write(": connected\n\n");
-    listeners.add(res);
+    listeners.set(res, biz);
     const ping = setInterval(() => res.write(": ping\n\n"), 25000);
     req.on("close", () => { clearInterval(ping); listeners.delete(res); });
     return;
   }
 
   if (parts[1] === "tally" && req.method === "GET") {
+    if (!can(m, "tally.read")) return refuse("see Tally figures");
     const what = parts[2];
     // the Windows app's uploads copied from Firebase (all companies) when there are any; else the mirror
-    if (what === "balances") return send(res, 200, (await tally.fromCopy(db, "balances")) || (await tally.balances(db)));
-    if (what === "vouchers") return send(res, 200, (await tally.fromCopy(db, "tallyVouchers")) || (await tally.vouchers(db)));
-    if (what === "bills") return send(res, 200, (await tally.fromCopy(db, "tallyBills")) || (await tally.bills(db)));
-    if (what === "stock") return send(res, 200, (await tally.fromCopy(db, "tallyStock")) || (await tally.stock(db)));
+    if (what === "balances") return send(res, 200, await run(async (c) => (await tally.fromCopy(c, "balances")) || (await tally.balances(c))));
+    if (what === "vouchers") return send(res, 200, await run(async (c) => (await tally.fromCopy(c, "tallyVouchers")) || (await tally.vouchers(c))));
+    if (what === "bills") return send(res, 200, await run(async (c) => (await tally.fromCopy(c, "tallyBills")) || (await tally.bills(c))));
+    if (what === "stock") return send(res, 200, await run(async (c) => (await tally.fromCopy(c, "tallyStock")) || (await tally.stock(c))));
     return send(res, 404, { error: "Unknown Tally data" });
   }
-  if (parts[1] === "tally" && parts[2] === "sync" && req.method === "POST") return send(res, 200, await mirrorNow("asked by " + user));
-  if (parts[1] === "firebase" && parts[2] === "copy" && req.method === "POST") return send(res, 200, await copyNow("asked by " + user));
+  if (parts[1] === "tally" && parts[2] === "sync" && req.method === "POST") {
+    if (!can(m, "tally.sync")) return refuse("start a Tally sync");
+    return biz === CHITTAM_BUSINESS ? send(res, 200, await mirrorNow("asked by " + user)) : chittamOnly();
+  }
+  if (parts[1] === "firebase" && parts[2] === "copy" && req.method === "POST") {
+    if (!can(m, "tally.sync")) return refuse("copy from Firebase");
+    return biz === CHITTAM_BUSINESS ? send(res, 200, await copyNow("asked by " + user)) : chittamOnly();
+  }
 
   if (parts[1] === "history" && req.method === "GET") {
     const n = Math.min(Number(url.searchParams.get("limit")) || 300, 2000);
     if (url.searchParams.get("coll") === "messages") {
-      const r = await db.query("SELECT id, data, created_at FROM messages ORDER BY created_at DESC LIMIT $1", [n]);
+      if (!can(m, "records.read")) return refuse("see messages");
+      const r = await run((c) => c.query("SELECT id, data, created_at FROM messages ORDER BY created_at DESC LIMIT $1", [n]));
       return send(res, 200, r.rows.map((x) => ({ ...x.data, id: x.id, at: x.data.at || x.created_at })));
     }
-    const r = await db.query("SELECT id, at, by_user, collection, record_id, action, name, details, before, after FROM activity ORDER BY at DESC, id DESC LIMIT $1", [n]);
+    if (!can(m, "history.read")) return refuse("see the history");
+    const r = await run((c) => c.query("SELECT id, at, by_user, collection, record_id, action, name, details, before, after FROM activity ORDER BY at DESC, id DESC LIMIT $1", [n]));
     return send(res, 200, r.rows.map((x) => ({ id: String(x.id), at: x.at, by: x.by_user, collection: x.collection, docId: x.record_id || undefined, action: x.action, name: x.name, details: x.details, before: x.before, after: x.after })));
   }
 
   // one-time move from Firebase: saved as a backup file (import-firebase.ts imports it)
   if (parts[1] === "import" && parts[2] === "firebase-snapshot" && req.method === "POST") {
+    if (!can(m, "business.manage")) return refuse("import from Firebase");
+    if (biz !== CHITTAM_BUSINESS) return chittamOnly();
     const snap = (await readBody(req, 300e6)) as { exportedAt?: string; by?: string; collections?: Record<string, unknown[]> };
     if (!snap.collections || typeof snap.collections !== "object") return send(res, 400, { error: "No collections in the export" });
     const dir = join(cfg.storage, "..", "backups", "firebase");
@@ -156,16 +246,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const file = join(dir, "firebase-export-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + ".json");
     writeFileSync(file, JSON.stringify(snap));
     const counts = Object.fromEntries(Object.entries(snap.collections).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]));
-    await db.query("INSERT INTO activity (by_user, collection, action, name, details) VALUES ($1, 'app', 'firebase-export-saved', $2, $3)", [user, file, { file, counts, exportedAt: snap.exportedAt || "" }]);
+    await run((c) => c.query("INSERT INTO activity (by_user, collection, action, name, details) VALUES ($1, 'app', 'firebase-export-saved', $2, $3)", [user, file, { file, counts, exportedAt: snap.exportedAt || "" }]));
     return send(res, 201, { ok: true, file, counts });
   }
 
   if (parts[1] === "activity" && req.method === "POST") {
+    if (!can(m, "records.write")) return refuse("add history entries");
     const b = (await readBody(req)) as Record<string, unknown>;
     if (!b.action) return send(res, 400, { error: "action is required" });
     // a phone resending an entry from its outbox: saved once
     const entryKey = String(req.headers["x-entry-key"] || "");
-    await tx(db, async (c) => {
+    await run(async (c) => {
       if (entryKey && (await c.query("SELECT 1 FROM submissions WHERE entry_key = $1", [entryKey])).rowCount) return;
       await c.query("INSERT INTO activity (by_user, collection, record_id, action, name, details) VALUES ($1, $2, $3, $4, $5, $6)",
         [user, String(b.collection || "app"), b.recordId ? String(b.recordId) : null, String(b.action), String(b.name || ""), b.details ?? null]);
@@ -176,23 +267,30 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   const coll = parts[1];
   if (!COLLECTIONS.has(coll)) return send(res, 404, { error: "Unknown collection: " + coll });
+  const mod = COLLECTION_MODULE[coll];
+  if (mod && !modules[mod]) return send(res, 403, { error: "The " + MODULE_LABEL[mod] + " module is switched off for this business. The owner can switch it on in Settings." });
   const id = parts[2] ? decodeURIComponent(parts[2]) : "";
 
   if (req.method === "GET" && !id) {
-    const r = await db.query(`SELECT id, version, updated_at, data FROM ${coll} ORDER BY updated_at DESC`);
+    if (!can(m, "records.read")) return refuse("see records");
+    const r = await run((c) => c.query(`SELECT id, version, updated_at, data FROM ${coll} ORDER BY updated_at DESC`));
     return send(res, 200, r.rows.map(row));
   }
   if (req.method === "GET" && id) {
-    const r = await db.query(`SELECT id, version, updated_at, data FROM ${coll} WHERE id = $1`, [id]);
+    if (!can(m, "records.read")) return refuse("see records");
+    const r = await run((c) => c.query(`SELECT id, version, updated_at, data FROM ${coll} WHERE id = $1`, [id]));
     return r.rowCount ? send(res, 200, row(r.rows[0])) : send(res, 404, { error: "Not found" });
   }
   if (req.method === "PUT" && id) {
+    if (!can(m, "records.write")) return refuse("change records");
+    // settings hold business-wide choices: owner only
+    if (coll === "settings" && !can(m, "business.manage")) return refuse("change settings");
     const body = (await readBody(req)) as Record<string, unknown>;
     if (typeof body !== "object" || body === null || Array.isArray(body)) return send(res, 400, { error: "Body must be an object" });
     const { id: _i, version: _v, updatedAt: _u, ...data } = body;
     const entryKey = String(req.headers["x-entry-key"] || "");
     const ifMatch = req.headers["if-match"] ? Number(req.headers["if-match"]) : null;
-    const result = await tx(db, async (c) => {
+    const result = await run(async (c) => {
       // a phone resending the same entry gets the first answer back; nothing is saved twice
       if (entryKey) {
         const seen = await c.query("SELECT result FROM submissions WHERE entry_key = $1", [entryKey]);
@@ -213,7 +311,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         [user, coll, id, before.rowCount ? "update" : "create", name, before.rows[0]?.data ?? null, data]);
       const out = row(saved.rows[0]);
       if (entryKey) await c.query("INSERT INTO submissions (entry_key, by_user, collection, record_id, result) VALUES ($1, $2, $3, $4, $5)", [entryKey, user, coll, id, out]);
-      await c.query("SELECT pg_notify('chittam_changes', $1)", [JSON.stringify({ collection: coll, id, version: out.version })]);
+      await c.query("SELECT pg_notify('chittam_changes', $1)", [JSON.stringify({ business: biz, collection: coll, id, version: out.version })]);
       return { status: before.rowCount ? 200 : 201, body: out };
     });
     return send(res, result.status, result.body);
