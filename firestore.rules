@@ -3,18 +3,23 @@ rules_version = '2';
 // Chittam Enterprises — Firestore security rules.
 // Paste into Firebase console → Firestore Database → Rules → Publish.
 //
-// - Only signed-in users can read or write.
+// - Only the staff logins listed in signedIn() can read or write.
 // - Customers, products, orders, service jobs, transports, receipts, Tally
 //   balances, transactions, stock and open invoices, and settings can be added and edited, never deleted.
 // - Message history and the change log can only be added to — never edited
 //   or deleted — and each entry must carry the signed-in user's email.
 // - Encryption (turned on from the app's Settings): once settings/crypto is on,
 //   every write must be encrypted (carry a new "enc"), and the passphrase's
-//   salt can never be swapped for another.
+//   salt can never be swapped for another, and it can't be turned off again.
 service cloud.firestore {
   match /databases/{database}/documents {
+    // only these logins get in (a Firebase account anyone else creates is refused);
+    // add a new staff member's email here and publish again
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.token.email in [
+        'tarunchettam12@gmail.com',
+        'tally-sync@chittamenterprises.in'
+      ];
     }
     function stampedBySelf() {
       return request.resource.data.by == request.auth.token.email;
@@ -90,7 +95,7 @@ service cloud.firestore {
     match /settings/crypto {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.on == true;
-      allow update: if signedIn() && request.resource.data.salt == resource.data.salt;
+      allow update: if signedIn() && request.resource.data.on == true && request.resource.data.salt == resource.data.salt;
       allow delete: if false;
     }
 
