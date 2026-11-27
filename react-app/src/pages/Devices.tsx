@@ -37,8 +37,11 @@ export function Devices() {
       "It signs out and wipes what it keeps — the saved passphrase and its offline copy of the data — as soon as it is online. " +
       "Anything it saved while offline and hasn't uploaded yet is lost.\n\nFor a lost or stolen phone, also change that login's password in the Firebase console.")) return;
     try {
-      await logEvent("device-logged-out", { name: d.name || d.label, device: d.id, email: d.email, app: d.app });
+      // History only once the logout is saved — except for this device, which reloads as soon as it is
+      const entry = { name: d.name || d.label, device: d.id, email: d.email, app: d.app };
+      if (self) await logEvent("device-logged-out", entry);
       await logoutDevice(d.id, user?.email || "");
+      if (!self) await logEvent("device-logged-out", entry);
       toast(self ? "Logging out this device…" : "Logged out. It signs out the next time it is online.");
     } catch (e) { toast("Couldn't log it out: " + (e as Error).message); }
   }
