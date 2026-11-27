@@ -272,7 +272,7 @@ The owner's decision: anyone can start a **free trial** by themselves, and buyin
    - the support reset ID check;
    - invoices for the subscription.
 4. The workspace is created with `status: "trial"` and `trialEnds = now + trial length`.
-5. During the trial (14 days), the Basic features work with the office PC and 2 other devices, up to a record cap.
+5. During the trial (14 days), **all features (Pro)** work, with the office PC and 2 other devices, up to a record cap. On purchase the customer picks a plan; features outside that plan become read-only (as on a downgrade).
 6. The app shows the days left and a **Buy** button.
 7. **Buy** opens the Cashfree payment page (UPI, card or net banking) for the chosen plan (Basic, Standard or Pro).
 8. When the payment succeeds, the gateway calls a **Cloud Function** (webhook). The function checks the gateway's signature, then sets:
@@ -346,7 +346,7 @@ Decided 2026-11-27:
    - The owner opens the provider account; Claude never handles its keys. Cashfree offers PAN verification, so one account can cover both payments and the PAN check.
    - Only the result (valid, and whether the name matches) and the PAN are stored.
    - For a support reset, support also checks a PAN card photo on a video call.
-10. **Trial:** 14 days, 2 devices plus the office PC, with a record cap and Basic features.
+10. **Trial:** 14 days, all features (Pro), 2 devices plus the office PC, with a record cap.
 11. **Payment gateway:** Cashfree (UPI, cards, net banking, subscriptions, webhooks). The owner creates the account, completes KYC and keeps the keys in the Cloud Function settings. Manual UPI marked in the operator page remains as a backup.
 12. **Plans:** Basic, Standard and Pro, each limited by devices and by features (see "Plans").
 13. **After expiry:** read-only, and **export is still allowed**. This replaces "no export on expiry" and avoids the legal question.
