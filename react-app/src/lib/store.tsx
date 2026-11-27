@@ -1,8 +1,7 @@
 // Signed-in user plus the live master data (customers, products, transports,
 // settings), shared by every page.
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
-import { auth } from "./firebase";
+import { onUser, signIn as relaySignIn, signOut, type User } from "./relay";
 import { isLocked, onCryptoChange, type CryptoConfig } from "./crypto";
 import { setParties } from "./parties";
 import { registerDevice } from "./devices";
@@ -65,7 +64,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
       return;
     }
-    return onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
+    return onUser((u) => { setUser(u); setAuthReady(true); });
   }, []);
 
   // this device in Settings → Devices (also while locked, so a logout from another device still reaches it)
@@ -108,8 +107,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value: Store = {
     user,
     authReady,
-    signIn: async (email, password) => { await signInWithEmailAndPassword(auth, email, password); },
-    signOutUser: () => signOut(auth),
+    signIn: (email, password) => relaySignIn(email, password),
+    signOutUser: () => signOut(),
     customers: active,
     suppliers,
     allCustomers: customers,

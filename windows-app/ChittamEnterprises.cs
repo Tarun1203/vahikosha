@@ -1075,7 +1075,13 @@ namespace ChittamEnterprises
     }
 
     // ------------------------------------------------------------------ Firebase
-    static class Firebase
+    // The relay: the only class that reaches the cloud (today Firebase: Auth and
+    // Firestore over REST). Everything else calls Relay.*, so the workspace paths
+    // (workspaces/{wid}/...) and a later move to another service change this class
+    // only. See docs/design-multi-customer-sync.md, work package 1. Same role as
+    // react-app/src/lib/relay.ts and js/00b-relay.js. This version does exactly
+    // what the app did before.
+    static class Relay
     {
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
 
@@ -1128,7 +1134,9 @@ namespace ChittamEnterprises
         {
             return new Dictionary<string, object> { { "mapValue", new Dictionary<string, object> { { "fields", fields } } } };
         }
-        static string BaseUrl(Settings s) { return "https://firestore.googleapis.com/v1/projects/" + s.ProjectId + "/databases/(default)/documents/"; }
+        // where records live: the one place the workspace prefix will be added
+        static string DocsRoot(Settings s) { return "projects/" + s.ProjectId + "/databases/(default)/documents/"; }
+        static string BaseUrl(Settings s) { return "https://firestore.googleapis.com/v1/" + DocsRoot(s); }
 
         // a Firestore REST value -> plain value (string, number, bool, map, list)
         static object Plain(object typed)
@@ -1338,7 +1346,7 @@ namespace ChittamEnterprises
         public static void SaveRecords(Settings s, string token, string coll, List<Tuple<string, Dictionary<string, object>, Dictionary<string, object>>> recs)
         {
             if (Crypto.On) { SaveRecordsSealed(s, token, coll, recs); return; }
-            string root = "projects/" + s.ProjectId + "/databases/(default)/documents/";
+            string root = DocsRoot(s);
             for (int i = 0; i < recs.Count; i += 150)
             {
                 string now = Now();
@@ -1370,7 +1378,7 @@ namespace ChittamEnterprises
         static void SaveRecordsSealed(Settings s, string token, string coll, List<Tuple<string, Dictionary<string, object>, Dictionary<string, object>>> recs)
         {
             if (Crypto.Locked(s)) throw new Exception("The data is encrypted: enter the passphrase in Tally Sync first.");
-            string root = "projects/" + s.ProjectId + "/databases/(default)/documents/";
+            string root = DocsRoot(s);
             for (int i = 0; i < recs.Count; i += 150)
             {
                 string now = Now();
@@ -1608,8 +1616,8 @@ namespace ChittamEnterprises
                 Log(msg);
                 try
                 {
-                    if (token == null) token = Firebase.SignIn(Settings);
-                    Firebase.LogCompanySwitch(Settings, token, Settings.LabelFor(key), current, newer);
+                    if (token == null) token = Relay.SignIn(Settings);
+                    Relay.LogCompanySwitch(Settings, token, Settings.LabelFor(key), current, newer);
                 }
                 catch { }
                 var h = CompanySwitched; if (h != null) h(msg);
@@ -1618,8 +1626,8 @@ namespace ChittamEnterprises
 
         void Run(bool force)
         {
-            string token = Firebase.SignIn(Settings);
-            Firebase.RefreshCrypto(Settings, token);
+            string token = Relay.SignIn(Settings);
+            Relay.RefreshCrypto(Settings, token);
             if (Crypto.Locked(Settings))
             {
                 LastError = "The data is encrypted: enter the passphrase (Tally Sync → Passphrase…).";
@@ -1649,9 +1657,9 @@ namespace ChittamEnterprises
                     {
                         if (appCustomers == null)
                         {
-                            if (token == null) token = Firebase.SignIn(Settings);
+                            if (token == null) token = Relay.SignIn(Settings);
                             // suppliers only (kind "supplier" in Parties & codes) are not customers
-                            appCustomers = new HashSet<string>(Firebase.List(Settings, token, "customers", "name", "kind")
+                            appCustomers = new HashSet<string>(Relay.List(Settings, token, "customers", "name", "kind")
                                 .Where(r => !(r.ContainsKey("kind") && Convert.ToString(r["kind"]) == "supplier"))
                                 .Select(r => Tally.Normalize(r.ContainsKey("name") ? Convert.ToString(r["name"]) : "")).Where(n => n.Length > 0));
                         }
@@ -1681,8 +1689,8 @@ namespace ChittamEnterprises
                 if (!force && Settings.LastHash.TryGetValue(key, out last) && last == hash) Log("[" + company + "] balances: no change");
                 else
                 {
-                    if (token == null) token = Firebase.SignIn(Settings);
-                    Firebase.SaveBalances(Settings, token, key, label, company, bal, names, parties);
+                    if (token == null) token = Relay.SignIn(Settings);
+                    Relay.SaveBalances(Settings, token, key, label, company, bal, names, parties);
                     Settings.LastHash[key] = hash;
                     Settings.LastStatus[key] = DateTime.Now.ToString("dd MMM yyyy, h:mm tt") + " · " + bal.Count + " names";
                     Settings.Save();
@@ -1702,8 +1710,8 @@ namespace ChittamEnterprises
                         if (!force && Settings.LastHash.TryGetValue(skey, out slast) && slast == shash) Log("[" + company + "] stock: no change");
                         else
                         {
-                            if (token == null) token = Firebase.SignIn(Settings);
-                            Firebase.SaveStock(Settings, token, key, label, company, stock);
+                            if (token == null) token = Relay.SignIn(Settings);
+                            Relay.SaveStock(Settings, token, key, label, company, stock);
                             Settings.LastHash[skey] = shash;
                             Settings.LastStatus[skey] = DateTime.Now.ToString("dd MMM yyyy, h:mm tt") + " · " + stock.Count + " stock items";
                             Settings.Save();
@@ -1732,8 +1740,8 @@ namespace ChittamEnterprises
                         if (!force && Settings.LastHash.TryGetValue(bkey, out blast) && blast == bhash) Log("[" + company + "] invoices: no change");
                         else
                         {
-                            if (token == null) token = Firebase.SignIn(Settings);
-                            Firebase.SaveBills(Settings, token, key, label, company, bills);
+                            if (token == null) token = Relay.SignIn(Settings);
+                            Relay.SaveBills(Settings, token, key, label, company, bills);
                             Settings.LastHash[bkey] = bhash;
                             Settings.LastStatus[bkey] = DateTime.Now.ToString("dd MMM yyyy, h:mm tt") + " · " + bills.Count + " open invoices";
                             Settings.Save();
@@ -1763,8 +1771,8 @@ namespace ChittamEnterprises
                 vsig += "\n#" + string.Join("\n", purchases.Select(p => p.Party + "|" + p.Amount.ToString(CultureInfo.InvariantCulture) + "|" + p.Count + "|" + p.Last));
                 string vhash = Hash(from.ToString("yyyyMMdd") + vsig), vkey = "v-" + key, vlast;
                 if (!force && Settings.LastHash.TryGetValue(vkey, out vlast) && vlast == vhash) { Log("[" + company + "] transactions: no change"); continue; }
-                if (token == null) token = Firebase.SignIn(Settings);
-                Firebase.SaveVouchers(Settings, token, key, label, company, from, to, vouchers, purchases);
+                if (token == null) token = Relay.SignIn(Settings);
+                Relay.SaveVouchers(Settings, token, key, label, company, from, to, vouchers, purchases);
                 Settings.LastHash[vkey] = vhash;
                 Settings.LastStatus[vkey] = DateTime.Now.ToString("dd MMM yyyy, h:mm tt") + " · " + vouchers.Count + " transactions";
                 Settings.Save();
@@ -1774,10 +1782,10 @@ namespace ChittamEnterprises
             // tell the app when Tally was last reached (so phones can warn about old figures)
             try
             {
-                if (token == null) token = Firebase.SignIn(Settings);
+                if (token == null) token = Relay.SignIn(Settings);
                 var reached = new List<string>();
                 foreach (var j in jobs) if (!string.IsNullOrEmpty(j[1]) && !failed.Contains(j[1])) reached.Add(j[1]);
-                Firebase.SaveStatus(Settings, token, failed.Count == 0, failed.Count == 0 ? "" : "Tally not reached for: " + string.Join(", ", failed), reached, Settings.AllCompanies());
+                Relay.SaveStatus(Settings, token, failed.Count == 0, failed.Count == 0 ? "" : "Tally not reached for: " + string.Join(", ", failed), reached, Settings.AllCompanies());
             }
             catch (Exception ex) { Log("Status note not saved: " + ex.Message); }
 
@@ -1795,10 +1803,10 @@ namespace ChittamEnterprises
                 string.Join("|", stock.Select(x => x.Name + "=" + x.Group + "=" + x.Rate.ToString(CultureInfo.InvariantCulture) + "=" + x.SellingPrice.ToString(CultureInfo.InvariantCulture)));
             string hash = Hash(sig), last;
             if (!force && Settings.LastHash.TryGetValue("masters", out last) && last == hash) { Log("Customers / products: no change in Tally"); return; }
-            if (token == null) token = Firebase.SignIn(Settings);
+            if (token == null) token = Relay.SignIn(Settings);
 
             // ---- customers
-            var existingC = Firebase.List(Settings, token, "customers", "name", "mobile");
+            var existingC = Relay.List(Settings, token, "customers", "name", "mobile");
             // matched by name ignoring case, spaces and punctuation; a near-identical
             // spelling (1-2 letters different) counts as the same customer, so no duplicate is added
             var byName = new Dictionary<string, Dictionary<string, object>>();
@@ -1830,7 +1838,7 @@ namespace ChittamEnterprises
                 }
                 else
                 {
-                    var id = Firebase.AppId("c_");
+                    var id = Relay.AppId("c_");
                     var mob = d.Mobile.Length > 0 ? d.Mobile : debtors.Where(x => Key(x.Name) == k).Select(x => x.Mobile).FirstOrDefault(m => m.Length > 0) ?? "";
                     cWrites.Add(Tuple.Create(id, new Dictionary<string, object> { { "id", id }, { "name", d.Name }, { "mobile", mob } }, (Dictionary<string, object>)null));
                     cAdded++;
@@ -1838,7 +1846,7 @@ namespace ChittamEnterprises
             }
 
             // ---- products
-            var existingP = Firebase.List(Settings, token, "products", "name", "price", "category");
+            var existingP = Relay.List(Settings, token, "products", "name", "price", "category");
             var pByName = new Dictionary<string, Dictionary<string, object>>();
             foreach (var p in existingP) { var k = Key(Convert.ToString(p.ContainsKey("name") ? p["name"] : "")); if (k.Length > 0 && !pByName.ContainsKey(k)) pByName[k] = p; }
             var pWrites = new List<Tuple<string, Dictionary<string, object>, Dictionary<string, object>>>();
@@ -1876,7 +1884,7 @@ namespace ChittamEnterprises
                     // only items you sell: in stock in either company, or with a selling price; never assets / dummy items
                     double tq; totalQty.TryGetValue(k, out tq);
                     if (notForSale(x.Group) || (tq <= 0 && x.SellingPrice <= 0)) continue;
-                    var id = Firebase.AppId("p_");
+                    var id = Relay.AppId("p_");
                     pWrites.Add(Tuple.Create(id, new Dictionary<string, object> { { "id", id }, { "name", x.Name }, { "category", x.Group }, { "price", Math.Round(tallyPrice, 2) } }, (Dictionary<string, object>)null));
                     pAdded++;
                 }
@@ -1891,9 +1899,9 @@ namespace ChittamEnterprises
                 if (similar.Count > 0) Log("[dry run] not added, almost the same name: " + string.Join("; ", similar));
                 return;
             }
-            if (cWrites.Count > 0) Firebase.SaveRecords(Settings, token, "customers", cWrites);
-            if (pWrites.Count > 0) Firebase.SaveRecords(Settings, token, "products", pWrites);
-            if (cWrites.Count > 0 || pWrites.Count > 0) Firebase.LogMasters(Settings, token, cAdded, cUpdated, pAdded, pUpdated);
+            if (cWrites.Count > 0) Relay.SaveRecords(Settings, token, "customers", cWrites);
+            if (pWrites.Count > 0) Relay.SaveRecords(Settings, token, "products", pWrites);
+            if (cWrites.Count > 0 || pWrites.Count > 0) Relay.LogMasters(Settings, token, cAdded, cUpdated, pAdded, pUpdated);
             Settings.LastHash["masters"] = hash;
             Settings.LastStatus["masters"] = DateTime.Now.ToString("dd MMM yyyy, h:mm tt") + " · " + cAdded + " customers added, " + cUpdated + " mobiles filled, " + pAdded + " products added, " + pUpdated + " updated";
             Settings.Save();
@@ -2378,7 +2386,7 @@ namespace ChittamEnterprises
                 else NextTry = DateTime.Now.AddMinutes(30);
                 s.Save();
                 if (made > 0)
-                    try { Firebase.LogBackup(s, Firebase.SignIn(s), made, files, bytes, manual); } catch { }
+                    try { Relay.LogBackup(s, Relay.SignIn(s), made, files, bytes, manual); } catch { }
                 return (made == 0 ? "No new backup: nothing changed." : made + " compan" + (made == 1 ? "y" : "ies") + " backed up, " + files + " changed file" + (files == 1 ? "" : "s") + " (" + MB(bytes) + ").") +
                     (retry > 0 ? " " + retry + " will be tried again in 30 minutes." : "") + free;
             }
@@ -2614,7 +2622,7 @@ namespace ChittamEnterprises
         public static void AskPassphrase(IWin32Window owner, SyncEngine sync)
         {
             var s = sync.Settings;
-            try { Firebase.RefreshCrypto(s, Firebase.SignIn(s)); }
+            try { Relay.RefreshCrypto(s, Relay.SignIn(s)); }
             catch (Exception ex) { MessageBox.Show(owner, "Could not check: " + ex.Message, "Passphrase", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (!Crypto.On)
             {
@@ -3183,8 +3191,8 @@ namespace ChittamEnterprises
                 sync.Log("Party codes written into Tally: " + okCount + " of " + items.Count + " ledgers");
                 try
                 {
-                    var token = Firebase.SignIn(settings);
-                    Firebase.LogAliases(settings, token, okCount, items.Count - okCount);
+                    var token = Relay.SignIn(settings);
+                    Relay.LogAliases(settings, token, okCount, items.Count - okCount);
                 }
                 catch { }
                 BeginInvoke((Action)delegate { done(true, "", results); sync.Start(true); });
@@ -3297,7 +3305,7 @@ namespace ChittamEnterprises
                 sync.Log(err == null ? "Posted to Tally: " + Tally.AppReceiptType + " " + party + " ₹" + amount.ToString("0.##", CultureInfo.InvariantCulture) + " into " + into + " (" + company + ")" : "Posting to Tally failed: " + err);
                 if (err == null)
                 {
-                    try { var token = Firebase.SignIn(sync.Settings); Firebase.LogVoucherPosted(sync.Settings, token, company, party, amount, into, dateIso, receiptId); } catch { }
+                    try { var token = Relay.SignIn(sync.Settings); Relay.LogVoucherPosted(sync.Settings, token, company, party, amount, into, dateIso, receiptId); } catch { }
                     sync.Start(true);   // bring the new voucher back so Tally Match shows it matched
                 }
                 BeginInvoke((Action)delegate {

@@ -1,5 +1,5 @@
 // Sample data for local development only (?demo). Never part of the published build.
-import type { User } from "firebase/auth";
+import type { User } from "./relay";
 import type { TallyVoucherSet, ActivityEntry, MessageEntry, BalanceSet, Customer, Order, Product, Receipt, ServiceJob, Transport } from "./data";
 
 export const demoUser = { email: "demo@example.com", uid: "demo" } as unknown as User;
@@ -147,7 +147,7 @@ export const demoTallyBills = {
 };
 
 // Settings → Devices: this device, a phone, the Windows app and a logged-out phone
-const ago = (msAgo: number) => ({ toDate: () => new Date(Date.now() - msAgo), toMillis: () => Date.now() - msAgo }) as unknown as import("firebase/firestore").Timestamp;
+const ago = (msAgo: number) => ({ toDate: () => new Date(Date.now() - msAgo), toMillis: () => Date.now() - msAgo }) as unknown as import("./relay").Timestamp;
 export const demoDevices = (me: string): import("./devices").Device[] => [
   { id: me, label: "Windows PC · Chrome", app: "Browser (new)", version: "3.43", email: "demo@example.com", firstSeen: "", lastSeen: ago(30e3) },
   { id: "dev_b", name: "Raju's phone", label: "Android phone · Chrome", app: "Installed app (old)", version: "3.4", email: "demo@example.com", firstSeen: "", lastSeen: ago(3 * 3600e3) },

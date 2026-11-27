@@ -3,8 +3,8 @@
 //   - nothing is ever deleted (there is no delete function here, and the
 //     database rules refuse deletes);
 //   - every add / edit also writes an entry to the activity log (History).
-import { collection, doc, onSnapshot, serverTimestamp, writeBatch, addDoc, getDocs, query, orderBy, limit, setDoc, runTransaction, type DocumentData, type Timestamp } from "firebase/firestore";
-import { db, auth } from "./firebase";
+import * as relay from "./relay";
+import { currentUser, serverTime, type DocumentData, type Timestamp } from "./relay";
 import { newConfig, openDoc, sealDoc, setCryptoConfig, type CryptoConfig } from "./crypto";
 
 // removed: hidden from lists (kept, never deleted); mergedInto: the customer it was merged into
@@ -139,24 +139,24 @@ export function normalizeName(s: string | undefined) {
 // update never replaces a newer one
 export function listenCollection<T>(name: string, cb: (items: T[], fromCache: boolean) => void, onError?: (e: Error) => void) {
   let seq = 0;
-  return onSnapshot(
-    collection(db, name),
-    { includeMetadataChanges: true },
-    (snap) => {
+  return relay.listenAll(
+    name,
+    (docs, fromCache) => {
       const mine = ++seq;
-      Promise.all(snap.docs.map(async (d) => ({ id: d.id, ...strip(await openDoc(d.data(), name + "/" + d.id)) }) as T))
-        .then((items) => { if (mine === seq) cb(items, snap.metadata.fromCache); })
+      Promise.all(docs.map(async (d) => ({ id: d.id, ...strip(await openDoc(d.data, name + "/" + d.id)) }) as T))
+        .then((items) => { if (mine === seq) cb(items, fromCache); })
         .catch((e) => onError?.(e));
     },
     onError,
+    { cacheChanges: true },
   );
 }
 
 export function listenDoc<T>(path: string, id: string, cb: (data: T | null) => void, onError?: (e: Error) => void) {
   let seq = 0;
-  return onSnapshot(doc(db, path, id), (d) => {
+  return relay.listenOne(path, id, (d) => {
     const mine = ++seq;
-    (d.exists() ? openDoc(d.data(), path + "/" + id).then((x) => strip(x) as T) : Promise.resolve(null))
+    (d ? openDoc(d, path + "/" + id).then((x) => strip(x) as T) : Promise.resolve(null))
       .then((x) => { if (mine === seq) cb(x); })
       .catch((e) => onError?.(e));
   }, onError);
@@ -164,8 +164,8 @@ export function listenDoc<T>(path: string, id: string, cb: (data: T | null) => v
 
 // settings/crypto: whether the data is encrypted (and the check for the passphrase); readable, never encrypted
 export function listenCrypto(cb: (c: CryptoConfig | null) => void, onError?: (e: Error) => void) {
-  return onSnapshot(doc(db, "settings", "crypto"), (d) => {
-    const c = d.exists() ? (d.data() as CryptoConfig) : null;
+  return relay.listenOne("settings", "crypto", (d) => {
+    const c = d ? (d as CryptoConfig) : null;
     setCryptoConfig(c).then(() => cb(c && c.on ? c : null));
   }, onError);
 }
@@ -183,26 +183,26 @@ function displayName(coll: string, data: DocumentData) {
 }
 
 export async function saveRecords(writes: Write[]) {
-  const user = auth.currentUser;
+  const user = currentUser();
   if (!user || !writes.length) return;
   const by = user.email || "";
   // chunks keep each batch well under Firestore's 500-write limit
   for (let i = 0; i < writes.length; i += 200) {
-    const batch = writeBatch(db);
+    const batch = relay.batch();
     for (const w of writes.slice(i, i + 200)) {
       const data = stable(strip(w.data)) as DocumentData;
       const isNew = !w.before;
-      const record: DocumentData = { ...data, updatedAt: serverTimestamp(), updatedBy: by };
-      if (isNew) Object.assign(record, { createdAt: serverTimestamp(), createdBy: by });
-      batch.set(doc(db, w.coll, w.id), await sealDoc(w.coll, record), { merge: w.coll !== "settings" });
-      batch.set(doc(collection(db, "activity")), await sealDoc("activity", {
+      const record: DocumentData = { ...data, updatedAt: serverTime(), updatedBy: by };
+      if (isNew) Object.assign(record, { createdAt: serverTime(), createdBy: by });
+      batch.set(w.coll, w.id, await sealDoc(w.coll, record), { merge: w.coll !== "settings" });
+      batch.add("activity", await sealDoc("activity", {
         collection: w.coll,
         docId: w.id,
         action: isNew ? "create" : "update",
         name: displayName(w.coll, data),
         before: w.before ? stable(strip(w.before)) : null,
         after: data,
-        at: serverTimestamp(),
+        at: serverTime(),
         by,
       }));
     }
@@ -224,15 +224,15 @@ export async function saveSettings(next: Settings, before: Settings | null) {
 
 // one entry in the activity log for anything that isn't a record change
 export async function logEvent(action: string, details: Record<string, unknown> = {}) {
-  const user = auth.currentUser;
+  const user = currentUser();
   if (!user) return;
   const d = stable(details) as Record<string, unknown>;
-  await addDoc(collection(db, "activity"), await sealDoc("activity", {
+  await relay.add("activity", await sealDoc("activity", {
     collection: "app",
     action,
     name: (d.name as string) || (d.customerName as string) || "",
     details: d,
-    at: serverTimestamp(),
+    at: serverTime(),
     by: user.email || "",
   }));
 }
@@ -241,16 +241,16 @@ export async function logEvent(action: string, details: Record<string, unknown> 
 // pressing Generate twice with the same text saves it once
 const lastMessage: Record<string, string> = {};
 export async function logMessage(type: string, customer: Customer | null, text: string, inputs: Record<string, unknown>) {
-  const user = auth.currentUser;
+  const user = currentUser();
   if (!user || lastMessage[type] === text) return;
   lastMessage[type] = text;
   const who = { customerId: customer?.id || "", customerName: customer?.name || "", mobile: customer?.mobile || "" };
-  const batch = writeBatch(db);
-  const msgRef = doc(collection(db, "messages"));
-  batch.set(msgRef, await sealDoc("messages", { type, text, inputs: stable(inputs), ...who, at: serverTimestamp(), by: user.email || "" }));
-  batch.set(doc(collection(db, "activity")), await sealDoc("activity", {
+  const batch = relay.batch();
+  const msgId = batch.newId("messages");
+  batch.set("messages", msgId, await sealDoc("messages", { type, text, inputs: stable(inputs), ...who, at: serverTime(), by: user.email || "" }));
+  batch.add("activity", await sealDoc("activity", {
     collection: "app", action: "message-generated", name: who.customerName,
-    details: { type, messageId: msgRef.id, ...who }, at: serverTimestamp(), by: user.email || "",
+    details: { type, messageId: msgId, ...who }, at: serverTime(), by: user.email || "",
   }));
   await batch.commit();
 }
@@ -267,17 +267,17 @@ export interface MessageEntry {
 }
 // the latest entries, newest first
 export async function loadLatest<T>(coll: "activity" | "messages", count = 300) {
-  const snap = await getDocs(query(collection(db, coll), orderBy("at", "desc"), limit(count)));
+  const docs = await relay.readLatest(coll, "at", count);
   // entries from before encryption was turned on stay as they were (readable)
-  return Promise.all(snap.docs.map(async (d) => ({ id: d.id, ...(await openDoc(d.data())) }) as T));
+  return Promise.all(docs.map(async (d) => ({ id: d.id, ...(await openDoc(d.data)) }) as T));
 }
 
 /* ---------------- Tally balances ---------------- */
 // replaces one company's balances (same document the Windows app's sync writes)
 export async function saveBalances(company: string, entry: BalanceSet & { matched: number; unmatched: string[] }) {
-  const user = auth.currentUser;
+  const user = currentUser();
   if (!user) return;
-  await setDoc(doc(db, "balances", company), await sealDoc("balances", { ...(stable(entry) as object), at: serverTimestamp(), by: user.email || "" }));
+  await relay.write("balances", company, await sealDoc("balances", { ...(stable(entry) as object), at: serverTime(), by: user.email || "" }));
   await logEvent("balances-imported", { name: entry.label, file: entry.file, matched: entry.matched, unmatched: entry.unmatched.length });
 }
 
@@ -290,9 +290,8 @@ export interface TallyVoucher { d: string; t: string; n: string; p: string; a: n
 export interface TallyVoucherSet { company: string; label?: string; tallyCompany?: string; from?: string; to?: string; syncedAt?: string; count?: number; vouchers: TallyVoucher[]; purchases?: { p: string; a: number; c: number; d: string }[] }
 // read once when the Tally Match page opens (a few hundred KB; not kept live)
 export async function loadTallyVouchers() {
-  const snap = await getDocs(collection(db, "tallyVouchers"));
   const out: Record<string, TallyVoucherSet> = {};
-  for (const d of snap.docs) out[d.id] = await openDoc<TallyVoucherSet>(d.data(), "tallyVouchers/" + d.id);
+  for (const d of await relay.readAll("tallyVouchers")) out[d.id] = await openDoc<TallyVoucherSet>(d.data, "tallyVouchers/" + d.id);
   return out;
 }
 
@@ -304,36 +303,34 @@ export const ENCRYPTED_COLLECTIONS = ["customers", "products", "transports", "or
 // saves the new passphrase's check value, then rewrites every record encrypted
 // (same content, same created/updated stamps). One History entry for the lot.
 export async function turnOnEncryption(pass: string, progress: (done: number, total: number) => void) {
-  const user = auth.currentUser;
+  const user = currentUser();
   if (!user) throw new Error("Not signed in.");
   const cfg = await newConfig(pass, user.email || "");
-  const ref = doc(db, "settings", "crypto");
-  await runTransaction(db, async (tx) => {
-    const cur = await tx.get(ref);
-    if (cur.exists() && (cur.data() as CryptoConfig).on) throw new Error("Encryption was already turned on from another device. Enter that passphrase instead.");
-    tx.set(ref, cfg);
+  await relay.update("settings", "crypto", (cur) => {
+    if (cur && (cur as CryptoConfig).on) throw new Error("Encryption was already turned on from another device. Enter that passphrase instead.");
+    return cfg as unknown as DocumentData;
   });
   await setCryptoConfig(cfg);
   const counts: Record<string, number> = {};
   const todo: { coll: string; id: string; data: DocumentData }[] = [];
   for (const coll of ENCRYPTED_COLLECTIONS) {
-    const snap = await getDocs(collection(db, coll));
+    const docs = await relay.readAll(coll);
     counts[coll] = 0;
-    snap.docs.forEach((d) => {
+    docs.forEach((d) => {
       if (coll === "settings" && d.id === "crypto") return;
-      if (typeof d.data().enc === "string") return;
-      todo.push({ coll, id: d.id, data: d.data() });
+      if (typeof d.data.enc === "string") return;
+      todo.push({ coll, id: d.id, data: d.data });
       counts[coll]++;
     });
   }
   // batches kept well under Firestore's limits (500 writes / 10 MB)
-  let batch = writeBatch(db), n = 0, size = 0, done = 0;
+  let batch = relay.batch(), n = 0, size = 0, done = 0;
   progress(0, todo.length);
   for (const t of todo) {
     const sealed = await sealDoc(t.coll, t.data);
     const len = String(sealed.enc || "").length;
-    if (n && (n >= 200 || size + len > 4_000_000)) { await batch.commit(); batch = writeBatch(db); n = 0; size = 0; }
-    batch.set(doc(db, t.coll, t.id), sealed);   // whole record replaced: no readable copy left
+    if (n && (n >= 200 || size + len > 4_000_000)) { await batch.commit(); batch = relay.batch(); n = 0; size = 0; }
+    batch.set(t.coll, t.id, sealed);   // whole record replaced: no readable copy left
     n++; size += len; done++;
     if (done % 25 === 0) progress(done, todo.length);
   }
