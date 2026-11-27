@@ -1,6 +1,6 @@
 import { Route, Routes } from "react-router";
 import { StoreProvider, useStore } from "@/lib/store";
-import { ToastProvider, Icon3D } from "@/components/kit";
+import { ToastProvider } from "@/components/kit";
 import { AppShell } from "@/components/AppShell";
 import { UpdateBar } from "@/lib/pwa";
 import { Login, Unlock } from "@/pages/Login";
@@ -27,7 +27,7 @@ function Gate() {
   if (!authReady || (user && !cryptoReady)) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Icon3D name="star" className="h-16 w-16 animate-float drop-shadow-xl" />
+        <img src={import.meta.env.BASE_URL + "brand/vahikosha-mark.svg"} alt="Vahikosha" className="h-16 w-16 animate-float drop-shadow-xl" />
       </div>
     );
   }

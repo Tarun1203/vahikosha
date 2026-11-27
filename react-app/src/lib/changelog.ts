@@ -4,6 +4,14 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.45", date: "2026-11-27", title: "Vahikosha — the app's new name, and your own dashboard", windows: "3.10",
+    items: [
+      "The app is now called Vahikosha, with its new logo — in the menu, the phone top bar, sign-in, the browser tab, the installed-app icon and the Windows app (window, tray, installer). Your business name (Chittam Enterprises) stays on messages, PDFs and the menu.",
+      "Dashboard → Customize: tick the widgets you want, move them up or down, or Reset to default. Three more widgets to add: Owed by route, Payments by mode, Deliveries due this week. The layout is saved for your login.",
+      "Old app 3.5 has the new name and logo too.",
+    ],
+  },
+  {
     version: "3.44", date: "2026-11-27", title: "A dashboard with the day's picture", windows: "3.9",
     items: [
       "Home now opens with figures and charts: owed to you, overdue, parties owing and payments in the last 30 days (with the change against the 30 days before) — the same figures as the List of receivables.",

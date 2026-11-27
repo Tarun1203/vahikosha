@@ -116,8 +116,8 @@ namespace ChittamSetup
             try { var upd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChittamEnterprises", "update"); if (Directory.Exists(upd)) Directory.Delete(upd, true); } catch { }
 
             var exe = Path.Combine(dir, ExeName);
-            Shortcut(StartMenuLink, exe, "Chittam Enterprises - orders, messages and Tally sync");
-            if (desktopShortcut) Shortcut(DesktopLink, exe, "Chittam Enterprises - orders, messages and Tally sync");
+            Shortcut(StartMenuLink, exe, "Vahikosha - orders, messages and Tally sync");
+            if (desktopShortcut) Shortcut(DesktopLink, exe, "Vahikosha - orders, messages and Tally sync");
             using (var k = Registry.CurrentUser.CreateSubKey(RunKey))
             {
                 if (startWithWindows) k.SetValue("ChittamEnterprises", "\"" + exe + "\" /tray");
@@ -146,9 +146,9 @@ namespace ChittamSetup
             bool removeData = false;
             if (!silent)
             {
-                var r = MessageBox.Show("Remove Chittam Enterprises from this PC?\n\nYour data stays safe in the online database. " +
+                var r = MessageBox.Show("Remove Vahikosha from this PC?\n\nYour data stays safe in the online database. " +
                     "Click Yes to keep this PC's Tally Sync settings and sign-in (for a later reinstall), or No to remove those too.",
-                    "Uninstall Chittam Enterprises", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                    "Uninstall Vahikosha", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
                 if (r == DialogResult.Cancel) return false;
                 removeData = r == DialogResult.No;
             }
@@ -164,7 +164,7 @@ namespace ChittamSetup
             // this program is running from the folder: remove it a moment after it closes
             var cmd = "/c ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"" + dir + "\"" + string.Concat(extra.Select(x => " & rmdir /s /q \"" + x + "\""));
             Process.Start(new ProcessStartInfo("cmd.exe", cmd) { CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false });
-            if (!silent) MessageBox.Show("Chittam Enterprises has been removed.", "Uninstall", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!silent) MessageBox.Show("Vahikosha has been removed.", "Uninstall", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return true;
         }
     }
@@ -180,7 +180,7 @@ namespace ChittamSetup
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Text = "Chittam Enterprises Setup";
+            Text = "Vahikosha Setup";
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
@@ -194,7 +194,7 @@ namespace ChittamSetup
                 Font = new Font("Segoe UI", 15f, FontStyle.Bold), ForeColor = Color.White, BackColor = brand };
             Controls.Add(badge);
             var v = Program.PackedVersion();
-            Controls.Add(new Label { Text = "Chittam Enterprises", Left = 96, Top = 26, AutoSize = true, Font = new Font("Segoe UI", 16f, FontStyle.Bold) });
+            Controls.Add(new Label { Text = "Vahikosha", Left = 96, Top = 26, AutoSize = true, Font = new Font("Segoe UI", 16f, FontStyle.Bold) });
             Controls.Add(new Label { Text = "Windows app" + (v.Length > 0 ? " · version " + v : "") + " — orders, messages and Tally sync", Left = 98, Top = 60, AutoSize = true, ForeColor = Color.DimGray });
             Controls.Add(new Label { Text = "Installs for this Windows user (no administrator needed) in:\n" + Program.InstallDir, Left = 28, Top = 100, Width = 470, Height = 44, ForeColor = Color.FromArgb(64, 64, 64) });
 
@@ -210,7 +210,7 @@ namespace ChittamSetup
             btnInstall.FlatAppearance.BorderSize = 0;
             btnInstall.Click += delegate { DoInstall(); };
             Controls.Add(btnInstall);
-            btnOpen = new Button { Text = "Open Chittam Enterprises", Left = 178, Top = 270, Width = 210, Height = 38, Visible = false, FlatStyle = FlatStyle.Flat };
+            btnOpen = new Button { Text = "Open Vahikosha", Left = 178, Top = 270, Width = 210, Height = 38, Visible = false, FlatStyle = FlatStyle.Flat };
             btnOpen.Click += delegate { try { Process.Start(Path.Combine(Program.InstallDir, Program.ExeName)); } catch { } Close(); };
             Controls.Add(btnOpen);
             var btnClose = new Button { Text = "Close", Left = 398, Top = 270, Width = 94, Height = 38, FlatStyle = FlatStyle.Flat };

@@ -9,6 +9,9 @@ import { Button, Dialog, Icon3D } from "@/components/kit";
 import { latestRelease } from "@/lib/changelog";
 import { useInstall, useJustUpdated } from "@/lib/pwa";
 import { useStore } from "@/lib/store";
+
+// the Vahikosha mark (public/brand), shown in the menu and the phone top bar
+const BRAND_MARK = import.meta.env.BASE_URL + "brand/vahikosha-mark-small.svg";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "@/version";
 
@@ -122,13 +125,14 @@ function SideLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void
 
 function DesktopNav() {
   const { open } = useSidebar();
+  const { settings } = useStore();
   return (
     <DesktopSidebar className="no-scrollbar sticky top-0 h-screen overflow-y-auto border-r border-neutral-200/70 bg-neutral-100/80 px-3 py-4 backdrop-blur">
       <div className="mb-5 flex items-center gap-2.5 px-1">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-600 to-indigo-600 text-xs font-extrabold text-white shadow-md">CE</span>
-        <motion.div animate={{ opacity: open ? 1 : 0, display: open ? "block" : "none" }} className="whitespace-pre">
-          <div className="text-sm leading-tight font-extrabold">Chittam Enterprises</div>
-          <div className="text-[11px] text-neutral-500">Business tool</div>
+        <img src={BRAND_MARK} alt="" className="h-9 w-9 shrink-0" />
+        <motion.div animate={{ opacity: open ? 1 : 0, display: open ? "block" : "none" }} className="min-w-0 whitespace-pre">
+          <div className="text-sm leading-tight font-extrabold text-[#1F3C88]">Vahikosha</div>
+          <div className="truncate text-[11px] text-neutral-500">{settings.businessName}</div>
         </motion.div>
       </div>
       <nav className="flex flex-1 flex-col gap-4">
@@ -153,6 +157,7 @@ function DesktopNav() {
 }
 
 function MobileMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { settings } = useStore();
   return (
     <AnimatePresence>
       {open && (
@@ -167,8 +172,8 @@ function MobileMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
           >
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-600 to-indigo-600 text-xs font-extrabold text-white">CE</span>
-                <span className="font-extrabold">Chittam Enterprises</span>
+                <img src={BRAND_MARK} alt="" className="h-9 w-9 shrink-0" />
+                <span><span className="block font-extrabold text-[#1F3C88]">Vahikosha</span><span className="block text-xs text-neutral-500">{settings.businessName}</span></span>
               </div>
               <button onClick={onClose} className="rounded-full p-2 hover:bg-neutral-200" aria-label="Close menu">
                 <IconX size={20} />
@@ -198,7 +203,7 @@ function MobileMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
 
 function titleFor(path: string) {
   for (const g of NAV) for (const it of g.items) if (it.to === path) return it.label;
-  return "Chittam Enterprises";
+  return "Vahikosha";
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -221,9 +226,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* phone top bar */}
         <header className="sticky top-0 z-40 flex items-center justify-between gap-3 bg-gradient-to-r from-brand-600 to-indigo-600 px-4 pt-[calc(0.6rem+env(safe-area-inset-top))] pb-2.5 text-white shadow-md md:hidden">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-xs font-extrabold text-brand-700">CE</span>
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white p-0.5"><img src={BRAND_MARK} alt="" className="h-full w-full" /></span>
             <div className="min-w-0">
-              <div className="truncate text-[15px] font-bold">{loc.pathname === "/" ? "Chittam Enterprises" : titleFor(loc.pathname)}</div>
+              <div className="truncate text-[15px] font-bold">{loc.pathname === "/" ? "Vahikosha" : titleFor(loc.pathname)}</div>
               <div className="text-white/80 [&_*]:!text-white/85"><SyncLine compact /></div>
             </div>
           </div>

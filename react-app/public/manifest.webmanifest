@@ -1,8 +1,8 @@
 {
   "id": "./",
-  "name": "Chittam Enterprises",
-  "short_name": "Chittam",
-  "description": "Orders, service jobs, customers, products and WhatsApp messages for Chittam Enterprises.",
+  "name": "Vahikosha",
+  "short_name": "Vahikosha",
+  "description": "Vahikosha — orders, service jobs, payments, ledgers and WhatsApp messages, alongside Tally.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -82,9 +82,9 @@ export function Login() {
         className="relative z-10 w-full max-w-sm rounded-3xl border border-white/60 bg-white/85 p-7 shadow-[0_30px_60px_-20px_rgba(36,99,235,0.35)] backdrop-blur-xl"
       >
         <div className="mb-6 flex items-center gap-3">
-          <Icon3D name="star" className="h-14 w-14 animate-float drop-shadow-xl" />
+          <img src={import.meta.env.BASE_URL + "brand/vahikosha-mark.svg"} alt="" className="h-14 w-14 animate-float drop-shadow-xl" />
           <div>
-            <h1 className="text-xl font-extrabold tracking-tight">Chittam Enterprises</h1>
+            <h1 className="text-xl font-extrabold tracking-tight text-[#1F3C88]">Vahikosha</h1>
             <p className="text-sm text-neutral-500">Sign in to continue</p>
           </div>
         </div>

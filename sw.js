@@ -4,10 +4,10 @@
    are served from the cache. Firestore / sign-in requests are never touched
    here — Firestore keeps its own offline copy of the data. */
 
-var CACHE = 'chittam-v21';
+var CACHE = 'chittam-v22';
 var APP_FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/favicon-32.png',
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/favicon-32.png', 'icons/vahikosha-mark-small.svg',
   'icons3d/chart.png', 'icons3d/calender.png', 'icons3d/money-bag.png', 'icons3d/notebook.png', 'icons3d/bag.png', 'icons3d/gift.png', 'icons3d/picture.png', 'icons3d/file-text.png', 'icons3d/tool.png', 'icons3d/rocket.png', 'icons3d/back.png', 'icons3d/boy.png', 'icons3d/cube.png', 'icons3d/location.png', 'icons3d/clock.png', 'icons3d/setting.png', 'icons3d/chat.png', 'icons3d/puzzle.png', 'icons3d/mobile.png', 'icons3d/star.png',
   'js/firebase-config.js', 'js/00-crypto.js', 'js/01-core.js', 'js/01b-database.js', 'js/02-nav.js', 'js/03-registry.js',
   'js/04-customers.js', 'js/05-products.js', 'js/06-duplicates.js', 'js/07-settings.js',

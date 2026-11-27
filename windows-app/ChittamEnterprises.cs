@@ -67,12 +67,12 @@ using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]
-[assembly: System.Reflection.AssemblyTitle("Chittam Enterprises")]
-[assembly: System.Reflection.AssemblyProduct("Chittam Enterprises")]
+[assembly: System.Reflection.AssemblyTitle("Vahikosha")]
+[assembly: System.Reflection.AssemblyProduct("Vahikosha")]
 [assembly: System.Reflection.AssemblyCompany("Chittam Enterprises")]
 // keep in step with Program.DesktopVersion (build.ps1 checks)
-[assembly: System.Reflection.AssemblyVersion("3.9.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("3.9")]
+[assembly: System.Reflection.AssemblyVersion("3.10.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("3.10")]
 
 namespace ChittamEnterprises
 {
@@ -82,7 +82,7 @@ namespace ChittamEnterprises
         public const string ClassicUrl = "https://tarun1203.github.io/Chittamenterprises/";
         // where new versions of this program are published (desktop/ folder of the site)
         public const string UpdateUrl = "https://tarun1203.github.io/Chittamenterprises/desktop/version.json";
-        public const string DesktopVersion = "3.9";
+        public const string DesktopVersion = "3.10";
 
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
@@ -1982,7 +1982,7 @@ namespace ChittamEnterprises
         public ExtraCompaniesForm(Settings s, List<string> tallyNames)
         {
             settings = s;
-            Text = "Companies — Chittam Enterprises";
+            Text = "Companies — Vahikosha";
             Font = Look.UI(9.5f);
             BackColor = Color.White;
             StartPosition = FormStartPosition.CenterParent;
@@ -2215,7 +2215,7 @@ namespace ChittamEnterprises
                 // Tally wrote to it meanwhile: this copy may not open, so it is not kept
                 if (!Same(before, Scan(src))) { RemoveStaging(staging, prev); return "busy (Tally changed it during the copy), will try again"; }
                 var manifest = new Dictionary<string, object> {
-                    { "source", src }, { "label", label }, { "at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") }, { "app", "Chittam Enterprises " + Program.DesktopVersion },
+                    { "source", src }, { "label", label }, { "at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") }, { "app", "Vahikosha " + Program.DesktopVersion },
                     { "files", before.Select(f => new Dictionary<string, object> { { "p", f.P }, { "size", f.Size }, { "mtime", f.Mtime }, { "sha256", f.Sha }, { "linked", f.Linked } }).ToList() } };
                 File.WriteAllText(Path.Combine(staging, "manifest.json"), new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Serialize(manifest), new UTF8Encoding(false));
                 Protect(staging);
@@ -2293,7 +2293,7 @@ namespace ChittamEnterprises
             var path = Path.Combine(root, "README - how to restore.txt");
             if (File.Exists(path)) return;
             File.WriteAllText(path,
-                "Tally backup by Chittam Enterprises\r\n\r\n" +
+                "Tally backup by Vahikosha\r\n\r\n" +
                 "Each company has a folder; inside, one folder per backup, named by date and time\r\n" +
                 "(yyyy-mm-dd hhmm). Every one of them is a complete copy of that company's Tally data.\r\n" +
                 "Unchanged files are shared between backups (hard links), so they take space only once.\r\n\r\n" +
@@ -2370,7 +2370,7 @@ namespace ChittamEnterprises
             if (s.BackupKnownPaths == null) s.BackupKnownPaths = new Dictionary<string, string>();
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Text = "Tally backup — Chittam Enterprises";
+            Text = "Tally backup — Vahikosha";
             Icon = icon;
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
@@ -2624,7 +2624,7 @@ namespace ChittamEnterprises
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Text = "Tally Sync — Chittam Enterprises";
+            Text = "Tally Sync — Vahikosha";
             Icon = icon;
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
@@ -2887,7 +2887,7 @@ namespace ChittamEnterprises
                     miUpdate.Visible = ready != null;
                     if (ready != null) miUpdate.Text = "Restart to update to " + ready;
                     if (ready != null && ready != before)
-                        tray.ShowBalloonTip(8000, "Update ready", "Chittam Enterprises " + ready + " is downloaded. It installs when the app restarts — or right-click the tray icon → Restart to update.", ToolTipIcon.Info);
+                        tray.ShowBalloonTip(8000, "Update ready", "Vahikosha " + ready + " is downloaded. It installs when the app restarts — or right-click the tray icon → Restart to update.", ToolTipIcon.Info);
                     PostStatus();
                 });
             });
@@ -2896,7 +2896,7 @@ namespace ChittamEnterprises
         void RestartToUpdate()
         {
             if (Updater.ApplyIfReady(!Visible)) ExitApp();
-            else MessageBox.Show(this, "The update isn't ready yet. Try again in a minute.", "Chittam Enterprises");
+            else MessageBox.Show(this, "The update isn't ready yet. Try again in a minute.", "Vahikosha");
         }
 
         public MainForm(bool startHidden)
@@ -2906,7 +2906,7 @@ namespace ChittamEnterprises
             SuspendLayout();
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Text = "Chittam Enterprises";
+            Text = "Vahikosha";
             StartPosition = FormStartPosition.CenterScreen;
             Size = new Size(1360, 880);
             MinimumSize = new Size(420, 520);
@@ -2921,7 +2921,7 @@ namespace ChittamEnterprises
             // ---- loading screen until the page is ready ----
             splash = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(250, 250, 250) };
             var badge = new Label { Text = "CE", Width = 64, Height = 64, TextAlign = ContentAlignment.MiddleCenter, Font = Look.UI(18f, FontStyle.Bold), ForeColor = Color.White, BackColor = Look.Brand };
-            var name = new Label { Text = "Chittam Enterprises", AutoSize = true, Font = Look.UI(16f, FontStyle.Bold), ForeColor = Look.Ink };
+            var name = new Label { Text = "Vahikosha", AutoSize = true, Font = Look.UI(16f, FontStyle.Bold), ForeColor = Look.Ink };
             splashText = new Label { Text = "Opening…", AutoSize = true, Font = Look.UI(10f), ForeColor = Look.Soft };
             splash.Controls.Add(badge); splash.Controls.Add(name); splash.Controls.Add(splashText);
             splash.Resize += delegate {
@@ -2936,10 +2936,10 @@ namespace ChittamEnterprises
             ResumeLayout(false);
 
             // ---- tray ----
-            tray = new NotifyIcon { Text = "Chittam Enterprises", Visible = true };
+            tray = new NotifyIcon { Text = "Vahikosha", Visible = true };
             tray.Icon = Icon ?? SystemIcons.Application;
             var trayMenu = new ContextMenuStrip { Font = Look.UI(9.5f), ShowImageMargin = false };
-            trayMenu.Items.Add(new ToolStripMenuItem("Open Chittam Enterprises", null, delegate { ShowWindow(); }) { Font = Look.UI(9.5f, FontStyle.Bold) });
+            trayMenu.Items.Add(new ToolStripMenuItem("Open Vahikosha", null, delegate { ShowWindow(); }) { Font = Look.UI(9.5f, FontStyle.Bold) });
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Tally sync now", null, delegate { SyncNow(); });
             trayMenu.Items.Add("Tally Sync settings…", null, delegate { ShowWindow(); OpenSyncSettings(); });
@@ -2971,7 +2971,7 @@ namespace ChittamEnterprises
             };
             timer.Start();
             UpdateStatus();
-            sync.Log("Chittam Enterprises " + Program.DesktopVersion + " started." + (sync.Settings.Configured ? "" : " Tally sync is not set up yet."));
+            sync.Log("Vahikosha " + Program.DesktopVersion + " started." + (sync.Settings.Configured ? "" : " Tally sync is not set up yet."));
 
             // a second launch brings this window forward
             showSignal = NativeShow.Create();
@@ -3020,7 +3020,7 @@ namespace ChittamEnterprises
             {
                 var msg = "The app window needs Microsoft Edge WebView2, which is part of Windows 11.\n\n" + ex.Message +
                     "\n\nInstall it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and start the app again.";
-                MessageBox.Show(this, msg, "Chittam Enterprises");
+                MessageBox.Show(this, msg, "Vahikosha");
             }
         }
 
@@ -3311,8 +3311,8 @@ namespace ChittamEnterprises
             else if (sync.LastError.Length > 0) text = "Tally sync: last try failed";
             else text = "Tally sync · next " + sync.NextSync.ToString("h:mm tt");
             miStatus.Text = text;
-            var tip = "Chittam Enterprises — " + text;
-            tray.Text = tip.Length > 63 ? "Chittam Enterprises" : tip;
+            var tip = "Vahikosha — " + text;
+            tray.Text = tip.Length > 63 ? "Vahikosha" : tip;
         }
 
         void OpenSyncSettings()
@@ -3346,7 +3346,7 @@ namespace ChittamEnterprises
                 Hide();
                 if (!toldAboutTray)
                 {
-                    tray.ShowBalloonTip(4000, "Still running", "Chittam Enterprises keeps syncing Tally here. Right-click the icon → Exit to close it fully.", ToolTipIcon.Info);
+                    tray.ShowBalloonTip(4000, "Still running", "Vahikosha keeps syncing Tally here. Right-click the icon → Exit to close it fully.", ToolTipIcon.Info);
                     toldAboutTray = true;
                 }
                 return;
