@@ -272,16 +272,16 @@ The owner's decision: anyone can start a **free trial** by themselves, and buyin
    - the support reset ID check;
    - invoices for the subscription.
 4. The workspace is created with `status: "trial"` and `trialEnds = now + trial length`.
-3. During the trial (14 days), the Basic features work with the office PC and 2 other devices, up to a record cap.
-4. The app shows the days left and a **Buy** button.
-5. **Buy** opens the Cashfree payment page (UPI, card or net banking) for the chosen plan (Basic, Standard or Pro).
-6. When the payment succeeds, the gateway calls a **Cloud Function** (webhook). The function checks the gateway's signature, then sets:
+5. During the trial (14 days), the Basic features work with the office PC and 2 other devices, up to a record cap.
+6. The app shows the days left and a **Buy** button.
+7. **Buy** opens the Cashfree payment page (UPI, card or net banking) for the chosen plan (Basic, Standard or Pro).
+8. When the payment succeeds, the gateway calls a **Cloud Function** (webhook). The function checks the gateway's signature, then sets:
    - `status: "active"`;
    - the `plan`;
    - `paidUntil`;
    - a payment record in `workspaces/{wid}/payments/` (never deleted).
-7. Renewal works the same way. Reminders are shown 7 days and 1 day before `paidUntil`.
-8. **When the trial or the paid period ends**, the workspace becomes **read-only**: the data can be seen and **exported**, but not changed, until payment.
+9. Renewal works the same way. Reminders are shown 7 days and 1 day before `paidUntil`.
+10. **When the trial or the paid period ends**, the workspace becomes **read-only**: the data can be seen and **exported**, but not changed, until payment.
 
 **What makes it safe**
 - Only the Cloud Function (Admin SDK) can change `status`, `plan`, `trialEnds` and `paidUntil`. The rules refuse those fields from any app, so a customer can't give themselves a plan.
