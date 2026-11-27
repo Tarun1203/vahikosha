@@ -19,13 +19,17 @@ The data is stored so that the hub can later move to Supabase (or a self-hosted 
 
 - **No setup per customer.** Install the app, sign in with Google, and the workspace is ready. Phones join by scanning a QR code.
 - **Each customer's data is separate.** No customer can read another's data, and the operator can't either.
+- **Readable data only on the business's own devices.** Data can be read only on the business's office PC and on the phones and PCs it has paired. The cloud holds only scrambled data.
 - **Works offline.** If the office PC is off or the internet is down, phones still read and write. Everything syncs later, with nothing lost.
 - **No deletes, everything logged.** These are the existing rules and they stay.
 - **Can move to Supabase later** without changing screens, encryption or the PC code.
 
 ## Out of scope
 
-- The full Control Center: support tools, reports for the operator, and staff roles beyond owner and member. Only the automatic trial and purchase are in scope (see "Trial and purchase").
+- The full Control Center: support tools and operator reports. Only these are in scope:
+  - the automatic trial and purchase;
+  - the support reset;
+  - PAN checks.
 - Billing or accounting features. The app stays a tool for sharing and maintaining data.
 - The Windows 7 legacy client.
 
@@ -56,7 +60,7 @@ The data is stored so that the hub can later move to Supabase (or a self-hosted 
 
 ```
 workspaces/{wid}                       { name, ownerUid, createdAt, status, kv }
-workspaces/{wid}/members/{uid}         { role: "owner" | "member", email, addedAt, addedBy }
+workspaces/{wid}/members/{uid}         { role: "owner" | "accountant" | "staff" | "ca", canApprove, until?, email, addedAt, addedBy }
 workspaces/{wid}/devices/{deviceId}    { name, uid, publicKey, addedAt, approvedBy, lastSeen, revokedAt? }
 workspaces/{wid}/keys/{deviceId}       { kv, wrapped }      // the data key, wrapped for this one device
 workspaces/{wid}/recovery              { kv, salt, iter, wrapped, check }
@@ -93,12 +97,43 @@ All cloud calls go through one file per client, called `relay` (`relay.ts` in th
   - IndexedDB `chittam-crypto` for the web apps;
   - DPAPI for the Windows app, as the passphrase key is kept today.
 
+## Roles
+
+| Role | Business data | Settings | Approves devices and people | Notes |
+|---|---|---|---|---|
+| **Owner** | Read and write all | Yes | Yes | One per workspace. Can hand approval to an Accountant. |
+| **Accountant** | Read and write all | Some | Only if the owner turns on `canApprove` | Its devices hold the data key, so it can pass the key to a new device. |
+| **Staff** | Day-to-day screens (orders, receipts, jobs, messages) | No | No | |
+| **Outside CA** | Read only | No | No | Access has an end date (`until`). When it ends, the CA is logged out and the key is changed. |
+| **Chittam support** | **None** | No | No | Not a workspace member, and never gets the data key. Sees only name, plan, status, dates, device count and storage. |
+
+- **Rules enforce the role on every write.** For example, staff can't write `settings`, and a CA can't write anything. The rules read the role from `members/{uid}`.
+- **What the rules can't do:** a readable copy on a device can't be limited by role. A device either has the data key or it doesn't. So read-only means "can't change it", not "can't see it". Everyone paired can see all business data. If later some staff must not see some data (for example amounts), that data needs its own key. That is a later step.
+- **Removing a member** works the same way as remote logout: the member is blocked, their devices are wiped, and the key is changed.
+
 ### Recovery key (the passphrase)
 
 - The owner chooses a passphrase when the workspace is created. The app can suggest one and offer it for printing.
 - PBKDF2(passphrase, salt, 310,000) gives a key that **wraps** the data key. The result is stored in `workspaces/{wid}/recovery`. The `check` field confirms a typed passphrase is right, the same way as today.
 - A device that has the passphrase can always unwrap the data key. That covers recovery and replacing the office PC.
-- **If the passphrase is lost on every device, the data cannot be recovered, including by the operator.** This is the price of "no one else can read it". The office PC's PostgreSQL copy and the Tally backups are not encrypted, so they still exist on that PC.
+- **No one, including support, can decrypt the cloud data without the passphrase or a paired device.** This is the price of "no one else can read it".
+
+### Support reset (lost passphrase and no working device)
+
+The owner's decision: support may **reset** the workspace after checking the owner's ID. A reset gives no access to the old scrambled data. It starts a new key and refills the data from the business's own sources.
+
+1. The owner asks support for a reset. Support checks the owner's PAN against the PAN given at registration, plus a call or video check.
+2. Support starts the reset in the operator page. **A 72-hour wait follows.** Every owner and Accountant device gets an alert, and so does the owner's email. If someone else asked while posing as the owner, the real owner can cancel the reset from any working device.
+3. After 72 hours, the following happens:
+   1. The old devices are logged out, and the old keys are retired.
+   2. The owner pairs a new office PC with a new data key and a new passphrase.
+   3. The old scrambled records are left untouched, because there are no deletes. They stay unreadable for good.
+4. **Refill:**
+   - Tally data is read again from Tally.
+   - Data that exists only in Vahikosha (orders, receipts, jobs, messages, customers' extra fields) comes back from the office PC's PostgreSQL copy, which is not scrambled.
+5. Every reset is logged permanently, with who asked, who approved, when, and what ID was checked.
+
+**Limit:** if the office PC (with its PostgreSQL copy) is also lost, data that existed only in Vahikosha cannot be recovered. Tally data still comes back from Tally or its backups. The Tally backup feature (Windows 3.9) and a backup of the PostgreSQL copy are therefore part of setup.
 
 ### Device keys
 
@@ -140,7 +175,7 @@ All cloud calls go through one file per client, called `relay` (`relay.ts` in th
 5. The phone unwraps the data key and starts syncing.
 6. **Without a QR code:** a device can also join by typing the recovery passphrase. This is meant for the owner's own devices and for recovery.
 
-Only the owner can approve. Members cannot add devices or people.
+Only the owner can approve, or an Accountant the owner has allowed to (`canApprove`). Other roles can't add devices or people.
 
 ### 3. Offline work
 
@@ -222,7 +257,21 @@ The owner's decision: anyone can start a **free trial** by themselves, and buyin
 
 **Flow**
 1. A new customer installs the app, signs in with Google and taps **Start free trial**.
-2. The workspace is created with `status: "trial"` and `trialEnds = now + trial length`.
+2. **Registration:**
+   - **Business name and the owner's PAN.**
+   - **Consent screen.** In plain words it says:
+     - what is stored, and where (their PC, their devices, scrambled in the cloud in Mumbai);
+     - that Chittam support can't read the business data;
+     - what support can see;
+     - how to export the data;
+     - how the reset works.
+
+     The owner must tick to agree. The version and time of the consent are saved.
+3. The PAN is sent to a Cloud Function, never written by the app directly. It is stored in an operator-only collection, `operator/owners/{uid}`, which no workspace member can read. It is **not** part of the workspace data. The PAN is used only for:
+   - one trial per business;
+   - the support reset ID check;
+   - invoices for the subscription.
+4. The workspace is created with `status: "trial"` and `trialEnds = now + trial length`.
 3. During the trial, everything works within trial limits (devices, records).
 4. The app shows the days left and a **Buy** button.
 5. **Buy** opens the payment page (a payment gateway such as Razorpay, using UPI, card or net banking).
@@ -237,7 +286,8 @@ The owner's decision: anyone can start a **free trial** by themselves, and buyin
 **What makes it safe**
 - Only the Cloud Function (Admin SDK) can change `status`, `plan`, `trialEnds` and `paidUntil`. The rules refuse those fields from any app, so a customer can't give themselves a plan.
 - The rules check the status on every business write: allowed only when the status is trial and `trialEnds` is still ahead, or active and `paidUntil` is still ahead.
-- **One trial per Google account and per office PC** (machine ID from the Windows app), so the trial can't be restarted endlessly.
+- **One trial per PAN**, plus per Google account and per office PC (machine ID from the Windows app), so the trial can't be restarted endlessly.
+- **The PAN is personal data** under the DPDP Act. It is stored once, used only for the purposes listed above, and readable only by Chittam support. It is never shown in full; only the last 4 characters appear on screen.
 - Manual payment (a UPI transfer to you) is also supported: you mark it paid in a small operator page, and the same function sets the status.
 
 **What the operator can and can't see:** name, plan, status, dates, device count and storage used. Never the business data, which stays encrypted.
@@ -276,8 +326,9 @@ The devices already signed in keep working. Each one registers its device key on
 5. **Conflicts:** `rev` and `edits`, the "choose one" screen, and History entries.
 6. **Remote logout with key rotation.**
 7. **Trial and purchase:** workspace status rules, Cloud Function webhook, Buy page, read-only on expiry, operator page.
-8. **Chittam Enterprises cut-over.**
-9. **Native Android build** (Capacitor, from branch `postgres-move`), with the same relay and keys.
+8. **Roles, the support reset, and registration (PAN and consent).**
+9. **Chittam Enterprises cut-over.**
+10. **Native Android build** (Capacitor, from branch `postgres-move`), with the same relay and keys.
 
 ## Owner decisions
 
@@ -287,9 +338,15 @@ Decided 2026-11-27:
 3. **Remote logout:** key rotation is in the first release.
 4. **Region:** Mumbai, asia-south1. The region of a Firestore database is fixed when it is created. If the current project's database is in another region, new customers go into a second, named Firestore database in asia-south1 in the same project. Chittam Enterprises can move into it during the cut-over. To check: the current database's region.
 
+5. **Readable data** only on the business's PC and paired devices; the cloud holds scrambled data only.
+6. **Five roles:** Owner, Accountant (can approve if allowed), Staff, Outside CA (read only, with an end date), and Chittam support (no data access).
+7. **Lost passphrase:** support reset after a PAN check, with a 72-hour wait and alerts. The data is refilled from Tally and the PC's PostgreSQL copy. This replaces the earlier plan line "recovery is owner-held, with no operator bypass". The reset doesn't decrypt anything, so the cloud data stays private.
+8. **PAN and a consent screen** at trial start.
+
 Still open:
-5. **Cut-over day** for Chittam Enterprises. Every device needs the new versions installed before that day.
-6. **Trial length and limits**, for example 14 or 30 days, 2 devices, and a record cap.
-7. **Plans and prices**, and whether billing is monthly or yearly.
-8. **Payment gateway.** The owner creates and verifies the gateway account (KYC) and keeps its keys. Claude never handles them.
-9. **Export after expiry:** confirm with a legal adviser whether it may be blocked.
+- **PAN check method:** a paid verification service, or a manual check by support.
+- **Cut-over day** for Chittam Enterprises. Every device needs the new versions installed before that day.
+- **Trial length and limits**, for example 14 or 30 days, 2 devices, and a record cap.
+- **Plans and prices**, and whether billing is monthly or yearly.
+- **Payment gateway.** The owner creates and verifies the gateway account (KYC) and keeps its keys. Claude never handles them.
+- **Export after expiry:** confirm with a legal adviser whether it may be blocked.
