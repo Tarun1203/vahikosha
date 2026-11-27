@@ -2316,13 +2316,13 @@ namespace ChittamEnterprises
             try
             {
                 var root = s.BackupPath ?? "";
-                if (root.Length == 0) return "Choose a backup folder first.";
+                if (root.Length == 0) { NextTry = DateTime.Now.AddMinutes(30); return "Choose a backup folder first."; }
                 Directory.CreateDirectory(root);
                 WriteReadme(root);
                 string note;
                 var targets = Targets(s, out note);
                 if (note.Length > 0) sync.Log("Tally backup: " + note.Trim());
-                if (targets.Count == 0) return "Nothing chosen to back up.";
+                if (targets.Count == 0) { NextTry = DateTime.Now.AddMinutes(30); return "Nothing chosen to back up."; }
                 if (s.BackupStatus == null) s.BackupStatus = new Dictionary<string, string>();
                 int made = 0, files = 0, retry = 0; long bytes = 0;
                 foreach (var t in targets)
@@ -2536,6 +2536,7 @@ namespace ChittamEnterprises
                 if (Convert.ToBoolean(r.Cells["On"].Value ?? false))
                     extra.Add(new BackupFolder { Path = Convert.ToString(r.Cells["Path"].Value), Label = Convert.ToString(r.Cells["Label"].Value ?? "").Trim() });
             if (err.Length == 0 && path.Length == 0 && (chkOn.Checked || extra.Count > 0)) err = "Choose a backup folder first.";
+            if (err.Length == 0 && chkOn.Checked && !chkSynced.Checked && extra.Count == 0) err = "Tick the synced companies or at least one other company to back up.";
             if (err.Length > 0) { if (showErrors) MessageBox.Show(this, err, "Tally backup", MessageBoxButtons.OK, MessageBoxIcon.Warning); return false; }
             s.BackupOn = chkOn.Checked;
             s.BackupTime = t.ToString(@"hh\:mm");
