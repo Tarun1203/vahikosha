@@ -9,7 +9,7 @@
    react-app/src/lib/relay.ts. */
 
 var Relay = (function(){
-  var fs = null;
+  var fs = null, workspace = null;
   return {
     // connects once; keeps working offline (queued saves upload when the connection returns)
     init: function(config){
@@ -18,9 +18,15 @@ var Relay = (function(){
       fs.enablePersistence({synchronizeTabs: true}).catch(function(){});
       return fs;
     },
-    // a collection, and one record in it (the one place the workspace prefix will be added)
-    coll: function(name){ return fs.collection(name); },
-    ref: function(name, id){ return fs.collection(name).doc(id); },
+    // The business's workspace: records then live at workspaces/{wid}/{collection}/{id}.
+    // null until the cut-over (docs/design-multi-customer-sync.md): until then the
+    // top-level paths are used, exactly as before.
+    setWorkspace: function(wid){ workspace = wid || null; },
+    workspace: function(){ return workspace; },
+    path: function(name){ return workspace ? 'workspaces/' + workspace + '/' + name : name; },
+    // a collection, and one record in it (the one place the workspace prefix is added)
+    coll: function(name){ return fs.collection(Relay.path(name)); },
+    ref: function(name, id){ return fs.collection(Relay.path(name)).doc(id); },
     // several writes saved together or not at all
     batch: function(){ return fs.batch(); },
     // "the time on the server when this reached it"

@@ -1135,8 +1135,15 @@ namespace ChittamEnterprises
             return new Dictionary<string, object> { { "mapValue", new Dictionary<string, object> { { "fields", fields } } } };
         }
         // where records live: the one place the workspace prefix will be added
-        static string DocsRoot(Settings s) { return "projects/" + s.ProjectId + "/databases/(default)/documents/"; }
+        // The business's workspace (workspaces/{wid}/...). Empty until the cut-over
+        // (docs/design-multi-customer-sync.md): until then the top-level paths are used, as before.
+        public static string Workspace = "";
+        static string DbRoot(Settings s) { return "projects/" + s.ProjectId + "/databases/(default)/documents/"; }
+        // where every record lives: the one place the workspace prefix is added
+        static string DocsRoot(Settings s) { return DbRoot(s) + (string.IsNullOrEmpty(Workspace) ? "" : "workspaces/" + Workspace + "/"); }
         static string BaseUrl(Settings s) { return "https://firestore.googleapis.com/v1/" + DocsRoot(s); }
+        // batched writes are sent to the database itself, never to a workspace path
+        static string CommitUrl(Settings s) { return "https://firestore.googleapis.com/v1/" + DbRoot(s).TrimEnd('/') + ":commit"; }
 
         // a Firestore REST value -> plain value (string, number, bool, map, list)
         static object Plain(object typed)
@@ -1369,7 +1376,7 @@ namespace ChittamEnterprises
                         { "after", Map(Fields(full)) }, { "at", Ts(now) }, { "by", Str(s.Email) }, { "source", Str("Tally sync") }
                     } } } } });
                 }
-                Send("POST", BaseUrl(s).TrimEnd('/') + ":commit", token, new Dictionary<string, object> { { "writes", writes } });
+                Send("POST", CommitUrl(s), token, new Dictionary<string, object> { { "writes", writes } });
             }
         }
 
@@ -1411,7 +1418,7 @@ namespace ChittamEnterprises
                         { "at", Ts(now) }, { "by", Str(s.Email) }, { "source", Str("Tally sync") }
                     } } } } });
                 }
-                Send("POST", BaseUrl(s).TrimEnd('/') + ":commit", token, new Dictionary<string, object> { { "writes", writes } });
+                Send("POST", CommitUrl(s), token, new Dictionary<string, object> { { "writes", writes } });
             }
         }
 
