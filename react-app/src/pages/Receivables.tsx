@@ -213,6 +213,8 @@ export function Receivables() {
                   <div className="flex items-center gap-2">
                     <span className="truncate font-semibold">{r.name}</span>
                     {r.customer && <Link to={"/ledger?c=" + r.customer.id} title="Ledger statement" className="shrink-0 text-neutral-400 hover:text-brand-700"><IconNotebook size={15} /></Link>}
+                    {r.customer && <Link to={"/payment-reminder?c=" + r.customer.id} title={"WhatsApp payment reminder" + (r.mobile ? "" : " (no mobile number saved)")}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"><IconBrandWhatsapp size={13} /> Remind</Link>}
                   </div>
                   <p className="text-xs text-neutral-500">{[r.code, kindLabel(r.kind), r.mobile].filter(Boolean).join(" · ")}
                     {r.oldest ? <span className={cn("ml-1.5 rounded-full px-1.5 py-0.5 font-bold", r.overdue ? "bg-rose-50 text-rose-700" : "bg-neutral-100 text-neutral-600")}>{r.oldest} days{r.overdue ? " · " + inr(r.overdue) + " overdue" : ""}</span> : null}</p>

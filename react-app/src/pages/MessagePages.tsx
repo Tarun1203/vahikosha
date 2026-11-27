@@ -1,6 +1,7 @@
 // Payment Reminder, Balance Confirmation, Dispatch, Stock Update, Stock Return
 // and Service Material: a form on the left, the WhatsApp message on the right.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { IconPlus } from "@tabler/icons-react";
 import { Button, Card, Field, PageHeader } from "@/components/kit";
 import {
@@ -49,7 +50,9 @@ function Section({ title, children, action }: { title: string; children: React.R
 
 /* ================= Payment Reminder ================= */
 export function PaymentReminder() {
-  const { settings } = useStore();
+  const { settings, customers } = useStore();
+  const [params] = useSearchParams();
+  const opened = useRef(false);
   const tally = useTallyFill();
   const tallyBills = useTallyBills();
   const companies = useCompanies();
@@ -84,6 +87,13 @@ export function PaymentReminder() {
     const when = syncedWhen(companies.map((co) => tallyBills[co.key]?.syncedAt).find(Boolean));
     setBillNote("🧾 " + count + " open invoice" + (count === 1 ? "" : "s") + " and pending days filled in from Tally (synced " + when + "). Check before sending.");
   }
+  // opened from another page (List of receivables) with ?c=<customer id>: pick it once the Tally bills are in
+  useEffect(() => {
+    const id = params.get("c");
+    if (!id || opened.current || tallyBills === null) return;
+    const c = customers.find((x) => x.id === id);
+    if (c) { opened.current = true; pick(c); }
+  }, [params, customers, tallyBills]);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div>
       <PageHeader icon="calender" eyebrow="Messages" title="Payment Reminder" subtitle="Outstanding in both accounts, invoice-wise due dates, and your UPI / bank details from Settings." />
