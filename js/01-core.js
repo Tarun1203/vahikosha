@@ -16,8 +16,8 @@
   /* ---------------- app version ---------------- */
   // bump both with every release; shown in the sidebar, the phone's More
   // menu and Settings, and announced once on each device after an update
-  var APP_VERSION = '3.3';
-  var APP_UPDATED = '2026-11-19';
+  var APP_VERSION = '3.4';
+  var APP_UPDATED = '2026-11-27';
 
   /* ---------------- storage helpers ---------------- */
   var LS_CUST = "cem_customers";

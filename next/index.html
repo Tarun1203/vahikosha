@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Chittam Enterprises</title>
+    <script>
+    /* Logged out from another device (Settings -> Devices): wipe what this device
+       keeps -- sign-in, saved passphrase key, offline copy of the data -- before
+       anything opens it again. The same in the old app (/) and the new app (next/). */
+    (function(){
+      try{
+        if(localStorage.getItem('cem_wipe') !== '1') return;
+        localStorage.clear(); sessionStorage.clear();
+        ['chittam-crypto', 'firebaseLocalStorageDb', 'firestore/[DEFAULT]/chittam-enterprises/main',
+         'firestore/chittam-next/chittam-enterprises/main'].forEach(function(n){ indexedDB.deleteDatabase(n); });
+        if(indexedDB.databases) indexedDB.databases().then(function(l){ l.forEach(function(d){ if(d.name) indexedDB.deleteDatabase(d.name); }); });
+      }catch(e){}
+    })();
+    </script>
     <meta name="theme-color" content="#2463EB" />
     <link rel="icon" type="image/png" href="favicon.png" />
     <link rel="manifest" href="manifest.webmanifest" />
@@ -11,8 +25,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <script type="module" crossorigin src="/Chittamenterprises/next/assets/index-qnFBBd0T.js"></script>
-    <link rel="stylesheet" crossorigin href="/Chittamenterprises/next/assets/index-CVLGJlnP.css">
+    <script type="module" crossorigin src="/Chittamenterprises/next/assets/index-CH49ydx7.js"></script>
+    <link rel="stylesheet" crossorigin href="/Chittamenterprises/next/assets/index-C6_4152O.css">
   </head>
   <body>
     <div id="root"></div>

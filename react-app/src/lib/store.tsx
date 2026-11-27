@@ -5,6 +5,7 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } fr
 import { auth } from "./firebase";
 import { isLocked, onCryptoChange, type CryptoConfig } from "./crypto";
 import { setParties } from "./parties";
+import { registerDevice } from "./devices";
 import { isCustomerKind, isSupplierKind, listenCollection, listenCrypto, listenDoc, defaultSettings, type Customer, type Product, type Transport, type Settings, type Order, type ServiceJob, type Receipt, type BalanceSet } from "./data";
 
 interface Store {
@@ -66,6 +67,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     return onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
   }, []);
+
+  // this device in Settings → Devices (also while locked, so a logout from another device still reaches it)
+  useEffect(() => {
+    if (!user || (import.meta.env.DEV && new URLSearchParams(location.search).has("demo"))) return;
+    return registerDevice(user);
+  }, [user]);
 
   // whether the data is encrypted: read before anything else
   useEffect(() => {

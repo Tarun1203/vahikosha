@@ -4,6 +4,15 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.43", date: "2026-11-27", title: "Devices signed in, and log one out",
+    items: [
+      "New page Settings → Devices signed in: every phone, PC and Windows app using Chittam, with its login, app, version and when it was last seen. “This device” is marked; give each a name (e.g. Raju's phone).",
+      "“Log out” signs that device out and wipes what it keeps — the saved passphrase and its offline copy of the data — as soon as it is online (straight away if it is). Logged-out devices stay in the list, greyed out; each logout is in History.",
+      "For a lost or stolen phone, also change that login's password in the Firebase console: the app's logout is obeyed by the app itself, so a phone kept offline only logs out when it comes back online.",
+      "Old app 3.4 records itself too and obeys the logout; its Settings → Database has a link to the list. Publish the updated database rules (firestore.rules) to turn it on.",
+    ],
+  },
+  {
     version: "3.42", date: "2026-11-27", title: "Safety: a payment can't be posted to Tally twice by mistake", windows: "3.8",
     items: [
       "Post to Tally now marks the payment as posted (when, by whom, how much, into which ledger). Opening Post to Tally again shows “Already posted” in red, and the button stays off unless you tick that the earlier voucher was deleted in Tally.",

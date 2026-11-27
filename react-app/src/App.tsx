@@ -14,6 +14,7 @@ import { Orders } from "@/pages/Orders";
 import { ServiceJobs } from "@/pages/ServiceJobs";
 import { History } from "@/pages/History";
 import { Settings } from "@/pages/Settings";
+import { Devices } from "@/pages/Devices";
 import { Catalog } from "@/pages/Catalog";
 import { TallyMatch } from "@/pages/TallyMatch";
 import { WhatsNew } from "@/pages/WhatsNew";
@@ -56,6 +57,7 @@ function Gate() {
         <Route path="/party-codes" element={<PartyCodes />} />
         <Route path="/receivables" element={<Receivables />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/devices" element={<Devices />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>
     </AppShell>

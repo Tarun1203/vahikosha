@@ -53,6 +53,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
       { to: "/history", label: "History", icon: "clock" },
       { to: "/whats-new", label: "What's new", icon: "chat" },
       { to: "/settings", label: "Settings", icon: "setting" },
+      { to: "/devices", label: "Devices signed in", icon: "setting" },
     ],
   },
 ];

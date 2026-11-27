@@ -4,6 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <script>
+/* Logged out from another device (Settings -> Devices): wipe what this device
+   keeps -- sign-in, saved passphrase key, offline copy of the data -- before
+   anything opens it again. The same in the old app (/) and the new app (next/). */
+(function(){
+  try{
+    if(localStorage.getItem('cem_wipe') !== '1') return;
+    localStorage.clear(); sessionStorage.clear();
+    ['chittam-crypto', 'firebaseLocalStorageDb', 'firestore/[DEFAULT]/chittam-enterprises/main',
+     'firestore/chittam-next/chittam-enterprises/main'].forEach(function(n){ indexedDB.deleteDatabase(n); });
+    if(indexedDB.databases) indexedDB.databases().then(function(l){ l.forEach(function(d){ if(d.name) indexedDB.deleteDatabase(d.name); }); });
+  }catch(e){}
+})();
+</script>
+<script>
 /* Phone layout switch (runs before the page draws). Adds html.mobile-app on
    narrow screens and on touch phones. In Chrome's "Desktop site" mode a phone
    lays the page out ~980px wide, so the page is also enlarged to the phone's
@@ -26,7 +40,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=20261127a">
+<link rel="stylesheet" href="css/app.css?v=20261127b">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#2463EB">
 <meta name="mobile-web-app-capable" content="yes">
@@ -693,6 +707,7 @@
         <p class="db-status" id="dbSettingsStatus">Stored only on this device.</p>
         <div class="btnrow">
           <button class="btn secondary" id="btnDbUpload">⬆ Upload this device's data to the database</button>
+          <a class="btn ghost" href="next/#/devices">📱 Devices signed in (log one out)</a>
         </div>
       </div>
 
@@ -890,33 +905,33 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="js/firebase-config.js?v=20261127a"></script>
-<script src="js/00-crypto.js?v=20261127a"></script>
-<script src="js/01-core.js?v=20261127a"></script>
-<script src="js/01b-database.js?v=20261127a"></script>
-<script src="js/02-nav.js?v=20261127a"></script>
-<script src="js/03-registry.js?v=20261127a"></script>
-<script src="js/04-customers.js?v=20261127a"></script>
-<script src="js/05-products.js?v=20261127a"></script>
-<script src="js/06-duplicates.js?v=20261127a"></script>
-<script src="js/07-settings.js?v=20261127a"></script>
-<script src="js/08-payment-updated.js?v=20261127a"></script>
-<script src="js/09-balance-confirmation.js?v=20261127a"></script>
-<script src="js/10-payment-reminder.js?v=20261127a"></script>
-<script src="js/11-dispatch-confirmation.js?v=20261127a"></script>
-<script src="js/12-stock-update.js?v=20261127a"></script>
-<script src="js/13-init.js?v=20261127a"></script>
-<script src="js/14-service-material.js?v=20261127a"></script>
-<script src="js/16-stock-return.js?v=20261127a"></script>
-<script src="js/18-history.js?v=20261127a"></script>
-<script src="js/19-orders.js?v=20261127a"></script>
-<script src="js/20-service-jobs.js?v=20261127a"></script>
-<script src="js/21-transports.js?v=20261127a"></script>
-<script src="js/22-app-install.js?v=20261127a"></script>
-<script src="js/24-receipts.js?v=20261127a"></script>
-<script src="js/25-picklist.js?v=20261127a"></script>
-<script src="js/26-tally-balances.js?v=20261127a"></script>
-<script src="js/23-mobile.js?v=20261127a"></script>
-<script src="js/27-look.js?v=20261127a"></script>
+<script src="js/firebase-config.js?v=20261127b"></script>
+<script src="js/00-crypto.js?v=20261127b"></script>
+<script src="js/01-core.js?v=20261127b"></script>
+<script src="js/01b-database.js?v=20261127b"></script>
+<script src="js/02-nav.js?v=20261127b"></script>
+<script src="js/03-registry.js?v=20261127b"></script>
+<script src="js/04-customers.js?v=20261127b"></script>
+<script src="js/05-products.js?v=20261127b"></script>
+<script src="js/06-duplicates.js?v=20261127b"></script>
+<script src="js/07-settings.js?v=20261127b"></script>
+<script src="js/08-payment-updated.js?v=20261127b"></script>
+<script src="js/09-balance-confirmation.js?v=20261127b"></script>
+<script src="js/10-payment-reminder.js?v=20261127b"></script>
+<script src="js/11-dispatch-confirmation.js?v=20261127b"></script>
+<script src="js/12-stock-update.js?v=20261127b"></script>
+<script src="js/13-init.js?v=20261127b"></script>
+<script src="js/14-service-material.js?v=20261127b"></script>
+<script src="js/16-stock-return.js?v=20261127b"></script>
+<script src="js/18-history.js?v=20261127b"></script>
+<script src="js/19-orders.js?v=20261127b"></script>
+<script src="js/20-service-jobs.js?v=20261127b"></script>
+<script src="js/21-transports.js?v=20261127b"></script>
+<script src="js/22-app-install.js?v=20261127b"></script>
+<script src="js/24-receipts.js?v=20261127b"></script>
+<script src="js/25-picklist.js?v=20261127b"></script>
+<script src="js/26-tally-balances.js?v=20261127b"></script>
+<script src="js/23-mobile.js?v=20261127b"></script>
+<script src="js/27-look.js?v=20261127b"></script>
 </body>
 </html>

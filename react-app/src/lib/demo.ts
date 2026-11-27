@@ -145,3 +145,12 @@ export const demoTallyBills = {
     { p: "Kashi SLN", n: "VE/12", d: iso(-10), due: iso(5), a: 7000, od: 0 },
   ] },
 };
+
+// Settings → Devices: this device, a phone, the Windows app and a logged-out phone
+const ago = (msAgo: number) => ({ toDate: () => new Date(Date.now() - msAgo), toMillis: () => Date.now() - msAgo }) as unknown as import("firebase/firestore").Timestamp;
+export const demoDevices = (me: string): import("./devices").Device[] => [
+  { id: me, label: "Windows PC · Chrome", app: "Browser (new)", version: "3.43", email: "demo@example.com", firstSeen: "", lastSeen: ago(30e3) },
+  { id: "dev_b", name: "Raju's phone", label: "Android phone · Chrome", app: "Installed app (old)", version: "3.4", email: "demo@example.com", firstSeen: "", lastSeen: ago(3 * 3600e3) },
+  { id: "dev_c", label: "Windows PC · Edge", app: "Windows app (new)", version: "3.43", email: "tally-sync@example.com", firstSeen: "", lastSeen: ago(10 * 60e3) },
+  { id: "dev_d", label: "Android phone · Chrome", app: "Browser (old)", version: "3.2", email: "demo@example.com", firstSeen: "", lastSeen: ago(5 * 86400e3), revokedAt: ago(4 * 86400e3), revokedBy: "demo@example.com" },
+];

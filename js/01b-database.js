@@ -299,6 +299,8 @@
     dbSetStatus('Connecting to database…');
     firebase.auth().onAuthStateChanged(function(user){
       dbUser = user;
+      if(dbDeviceStop){ dbDeviceStop(); dbDeviceStop = null; }
+      if(user) dbDeviceStop = dbDevice(user);
       if(!user){
         dbUnsubs.forEach(function(u){ u(); });
         dbUnsubs = [];
@@ -318,7 +320,45 @@
       }, dbReadError);
     });
   }
-  var dbStarted = false, dbCryptoUnsub = null;
+  var dbStarted = false, dbCryptoUnsub = null, dbDeviceStop = null;
+
+  /* ---------------- this device (Settings → Devices in the new app) ----------------
+     Same record and the same id as the new app (next/, lib/devices.ts): "last seen"
+     kept fresh, and when it's logged out from another device, it signs out and
+     wipes what it keeps (index.html finishes the wipe on reload). Kept readable
+     (not encrypted) so a device without the passphrase still sees the logout. */
+  function dbDeviceId(){
+    try{ var d = JSON.parse(localStorage.getItem('cem_device') || 'null'); if(d && d.id) return d; }catch(e){}
+    var rnd = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+    var n = {id: 'dev_' + rnd, firstSeen: new Date().toISOString()};
+    try{ localStorage.setItem('cem_device', JSON.stringify(n)); }catch(e){}
+    return n;
+  }
+  function dbDeviceLabel(){
+    var ua = navigator.userAgent;
+    var kind = /Android/i.test(ua) ? (/Mobile/i.test(ua) ? 'Android phone' : 'Android tablet') : /iPhone/i.test(ua) ? 'iPhone' : /iPad/i.test(ua) ? 'iPad'
+      : /Windows/i.test(ua) ? 'Windows PC' : /Mac OS/i.test(ua) ? 'Mac' : /Linux/i.test(ua) ? 'Linux PC' : 'Device';
+    var br = /Edg\//.test(ua) ? 'Edge' : /SamsungBrowser/.test(ua) ? 'Samsung Internet' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
+    return kind + (br ? ' · ' + br : '');
+  }
+  function dbWipeDevice(){
+    try{ localStorage.setItem('cem_wipe', '1'); }catch(e){}
+    firebase.auth().signOut().catch(function(){}).then(function(){ location.reload(); });
+  }
+  function dbDevice(user){
+    var me = dbDeviceId(), ref = db.collection('devices').doc(me.id);
+    var app = window.chittamDesktop ? 'Windows app' : (document.referrer.indexOf('android-app://') === 0 || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) ? 'Installed app' : 'Browser';
+    function beat(){
+      ref.set({label: dbDeviceLabel(), app: app + ' (old)', version: (typeof APP_VERSION !== 'undefined' ? APP_VERSION : ''), email: user.email || '',
+        firstSeen: me.firstSeen, lastSeen: dbNow()}, {merge: true}).catch(function(){});
+    }
+    beat();
+    var timer = setInterval(function(){ if(document.visibilityState === 'visible') beat(); }, 15 * 60 * 1000);
+    function onVis(){ if(document.visibilityState === 'visible') beat(); }
+    document.addEventListener('visibilitychange', onVis);
+    var unsub = ref.onSnapshot(function(d){ if(d.exists && d.data().revokedAt) dbWipeDevice(); }, function(){});
+    return function(){ clearInterval(timer); document.removeEventListener('visibilitychange', onVis); unsub(); };
+  }
   function dbCryptoCheck(){
     if(!dbUser) return;
     if(CC.isLocked()){ dbShowUnlock(true); return; }

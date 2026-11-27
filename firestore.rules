@@ -99,6 +99,18 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Settings → Devices: each device records itself (readable, not encrypted, so a
+    // device without the passphrase still sees that it was logged out). A logout
+    // (revokedAt) can't be undone or changed, and nothing is deleted.
+    match /devices/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.email == request.auth.token.email &&
+        !('revokedAt' in request.resource.data);
+      allow update: if signedIn() &&
+        (!('revokedAt' in resource.data) || request.resource.data.revokedAt == resource.data.revokedAt);
+      allow delete: if false;
+    }
+
     match /messages/{id} {
       allow read: if signedIn();
       allow create: if signedIn() && stampedBySelf() && sealed();
