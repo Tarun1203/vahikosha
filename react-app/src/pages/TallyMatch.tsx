@@ -330,7 +330,7 @@ function RecordDialog({ entry, onClose, accLabel, modes, cashMode, bankMode }: {
 // an app payment -> a Receipt voucher in Tally (Windows app on the Tally PC only).
 // The Windows app shows its own confirmation with the whole voucher before creating it.
 function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null; onClose: () => void; accLabel: (a: Account) => string }) {
-  const { balances, receipts } = useStore();
+  const { balances, receipts, user } = useStore();
   const companies = useCompanies();
   const toast = useToast();
   const [ledgers, setLedgers] = useState<string[] | null>(null);
@@ -349,7 +349,10 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
   const [co, setCo] = useState<Account>("business");
   // when posting into the other company, also move the payment there in the app (so Tally Match agrees)
   const [moveInApp, setMoveInApp] = useState(true);
+  // posted to Tally before (from the app): only again on purpose (e.g. that voucher was deleted in Tally)
+  const [again, setAgain] = useState(false);
   const receipt = payment ? receipts.find((x) => x.id === payment.receiptId) : undefined;
+  const postedBefore = payment ? receipt?.tallyPosted?.[co] || (co === payment.account ? undefined : receipt?.tallyPosted?.[payment.account]) : undefined;
   // the customer's ledger as spelled in Tally (from the balance sync), in the chosen company
   const tallyName = !payment ? "" : balances[co]?.names?.[normalizeName(payment.name)]
     || (balances[co]?.balances?.[normalizeName(payment.name)] !== undefined ? payment.name : "");
@@ -378,6 +381,7 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
     setRest({ type: "On Account", ref: "" });
     setCo(payment.account);
     setMoveInApp(true);
+    setAgain(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payment]);
   // the chosen company's cash / bank ledgers
@@ -400,22 +404,28 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
     if (!payment || d.receiptId !== payment.receiptId) return;
     setBusy(false);
     if (!d.ok) { if (d.error !== "Not posted.") setErr(d.error); return; }
+    if (!receipt) { toast("Posted to Tally. It shows as matched after the sync finishes (a few seconds)."); onClose(); return; }
+    // marked as posted on the payment, so it isn't posted twice
+    const mark = { at: new Date().toISOString(), by: user?.email || "", amount: payment.amount, into };
+    const marked = { ...receipt, tallyPosted: { ...(receipt.tallyPosted || {}), [co]: mark, ...(otherCo ? { [payment.account]: mark } : {}) } };
     // posted into the other company: move the amount there in the app too, only now that Tally has it
-    if (otherCo && moveInApp && receipt) {
+    const moving = otherCo && moveInApp;
+    let next = marked;
+    if (moving) {
       const from = payment.account, amt = payment.amount;
-      const moved = withAmount(withAmount(receipt, from, Math.max(0, amountOf(receipt, from) - amt)), co, amountOf(receipt, co) + amt);
-      const next = { ...moved, note: ((receipt.note ? receipt.note + " · " : "") + "moved to " + accLabel(co) + " when posted to Tally").slice(0, 200) };
-      saveRecord("receipts", next, receipt)
-        .then(() => toast("Posted to " + accLabel(co) + " in Tally, and moved there in the app."))
-        .catch((e) => toast("Posted to Tally, but the app's payment couldn't be moved: " + (e as Error).message));
-    } else toast("Posted to Tally. It shows as matched after the sync finishes (a few seconds).");
+      const moved = withAmount(withAmount(marked, from, Math.max(0, amountOf(marked, from) - amt)), co, amountOf(marked, co) + amt);
+      next = { ...moved, note: ((receipt.note ? receipt.note + " · " : "") + "moved to " + accLabel(co) + " when posted to Tally").slice(0, 200) };
+    }
+    saveRecord("receipts", next, receipt)
+      .then(() => toast(moving ? "Posted to " + accLabel(co) + " in Tally, and moved there in the app." : "Posted to Tally. It shows as matched after the sync finishes (a few seconds)."))
+      .catch((e) => toast("Posted to Tally, but the app couldn't record it" + (moving ? " or move the payment" : "") + ": " + (e as Error).message));
     onClose();
   });
   const tooMuch = onAccount < -0.004;
   const needsRef = onAccount > 0.004 && rest.type !== "On Account";
   const restRef = rest.ref.trim() || (payment ? (rest.type === "Advance" ? "ADV" : "REF") + "/" + payment.date.replace(/-/g, "").slice(2) + "/" + (receipt?.ref || payment.receiptId).replace(/[^A-Za-z0-9]/g, "").slice(-6) : "");
   function send() {
-    if (!payment || !tallyName || !into || tooMuch) return;
+    if (!payment || !tallyName || !into || tooMuch || (postedBefore && !again)) return;
     setBusy(true); setErr("");
     const bills = openBills.filter((b) => num(adj[b.n] || "") > 0).map((b) => ({ ref: b.n, amount: num(adj[b.n] || "") }));
     desktopPost({ type: "tally-post-receipt", key: co, date: payment.date, party: tallyName, into, amount: payment.amount, narration, receiptId: payment.receiptId,
@@ -423,7 +433,7 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
   }
   return (
     <Dialog open={!!payment} onClose={onClose} title="Post to Tally"
-      footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button onClick={send} disabled={busy || !tallyName || !into || tooMuch}><IconSend size={16} /> {busy ? "Waiting for confirmation…" : "Post receipt"}</Button></>}>
+      footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button onClick={send} disabled={busy || !tallyName || !into || tooMuch || (!!postedBefore && !again)}><IconSend size={16} /> {busy ? "Waiting for confirmation…" : "Post receipt"}</Button></>}>
       {payment && <>
         <div className="rounded-xl bg-neutral-50 p-3 text-sm">
           <div className="font-bold">{payment.name} · {inr(payment.amount)}</div>
@@ -444,6 +454,13 @@ function PostDialog({ payment, onClose, accLabel }: { payment: AppPayment | null
           <dd className="font-semibold">{tallyName || <span className="text-rose-600">No ledger named “{payment.name}” in Tally — create it in Tally (or fix the spelling) first.</span>}</dd>
           <dt className="text-neutral-500">Amount</dt><dd className="font-semibold">{inr(payment.amount)}</dd>
         </dl>
+        {postedBefore && (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+            <p className="font-bold">Already posted to Tally — {accLabel(co === payment.account || receipt?.tallyPosted?.[co] ? co : payment.account)} · {new Date(postedBefore.at).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}{postedBefore.by ? " by " + postedBefore.by : ""} · {inr(postedBefore.amount)} into {postedBefore.into}</p>
+            <p className="mt-1">Posting again makes a second voucher, so the payment is counted twice. Do it only if that voucher was deleted in Tally.</p>
+            <label className="mt-2 flex items-center gap-2 font-semibold"><input type="checkbox" className="size-4 accent-rose-600" checked={again} onChange={(e) => setAgain(e.target.checked)} /> The earlier voucher was deleted in Tally — post again</label>
+          </div>
+        )}
         {otherCo && (
           <label className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
             <input type="checkbox" className="mt-0.5 size-4 accent-brand-600" checked={moveInApp} onChange={(e) => setMoveInApp(e.target.checked)} />

@@ -11,7 +11,6 @@
     renderBankRows(s.bankList);
     renderModesList(s.paymentModes);
     document.getElementById('sbBusinessName').textContent = s.businessName || 'Chittam Enterprises';
-    document.getElementById('cloud-url').value = localStorage.getItem('cem_cloud_url') || '';
   }
 
   /* -- UPI rows -- */
@@ -211,72 +210,5 @@
   }
 
 
-  /* ---------------- cloud sync (Google Sheet via Apps Script) ---------------- */
-  document.getElementById('cloud-url').addEventListener('change', function(){
-    localStorage.setItem('cem_cloud_url', this.value.trim());
-    if(typeof dbLogEvent === 'function') dbLogEvent('sheet-url-changed', {url: this.value.trim()});
-  });
-
-  function cloudStatus(msg, isError){
-    var el = document.getElementById('cloudSyncStatus');
-    el.textContent = msg;
-    el.style.color = isError ? 'var(--stamp)' : 'var(--money)';
-    el.classList.add('show');
-    setTimeout(function(){ el.classList.remove('show'); }, 4000);
-  }
-
-  document.getElementById('btnCloudPush').addEventListener('click', function(){
-    var url = document.getElementById('cloud-url').value.trim();
-    if(!url){ showToast('Paste your Google Sheet Web App URL first.'); return; }
-    var payload = {
-      customers: getCustomers(),
-      products: getProducts(),
-      settings: getSettings()
-    };
-    cloudStatus('Pushing…', false);
-    fetch(url, {
-      method: 'POST',
-      headers: {'Content-Type': 'text/plain;charset=utf-8'}, // avoids a CORS preflight against Apps Script
-      body: JSON.stringify(payload)
-    })
-      .then(function(res){ return res.json(); })
-      .then(function(data){
-        if(data && data.ok){
-          cloudStatus('Pushed to Sheet ✓');
-          if(typeof dbLogEvent === 'function') dbLogEvent('sheet-push', {customers: payload.customers.length, products: payload.products.length});
-        }
-        else{ cloudStatus('Sheet did not confirm the push — check the Apps Script setup.', true); }
-      })
-      .catch(function(err){
-        cloudStatus('Push failed — check the URL and your internet connection.', true);
-      });
-  });
-
-  document.getElementById('btnCloudPull').addEventListener('click', function(){
-    var url = document.getElementById('cloud-url').value.trim();
-    if(!url){ showToast('Paste your Google Sheet Web App URL first.'); return; }
-    cloudStatus('Pulling…', false);
-    fetch(url)
-      .then(function(res){ return res.json(); })
-      .then(function(data){
-        if(!data || (!data.customers && !data.products && !data.settings)){
-          cloudStatus('Sheet returned no data yet — push from a device first.', true);
-          return;
-        }
-        if(data.customers) saveCustomers(data.customers);
-        if(data.products) saveProducts(data.products);
-        if(data.settings) saveSettings(data.settings);
-        loadSettingsIntoForm();
-        renderCustomerTable();
-        renderProductTable();
-        refreshAllPickers();
-        refreshSuDbPicker();
-        populatePaymentModeSelect();
-        refreshBusinessLabels();
-        cloudStatus('Pulled from Sheet ✓ — this device now matches it.');
-        if(typeof dbLogEvent === 'function') dbLogEvent('sheet-pull', {customers: (data.customers || []).length, products: (data.products || []).length});
-      })
-      .catch(function(err){
-        cloudStatus('Pull failed — check the URL and your internet connection.', true);
-      });
-  });
+  // (the old Google Sheet push / pull was removed in 3.3: it sent the data unencrypted
+  //  to a sheet anyone with the link could open, and Pull could overwrite newer records)

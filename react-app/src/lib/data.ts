@@ -80,6 +80,8 @@ export interface Receipt {
   receivedBy?: string;   // cash: who collected it
   txnRef?: string;       // other modes: transaction ID / UTR / cheque no.
   extra?: Record<string, number>;   // amounts for companies beyond Chittam Enterprises and Cash (by company key)
+  // posted to Tally from the app, by company key: when, by whom, how much, into which ledger (so it isn't posted twice)
+  tallyPosted?: Record<string, { at: string; by: string; amount: number; into: string }>;
 }
 export interface BalanceSet {
   company: string; label?: string; file?: string; importedAt?: string; importedBy?: string;

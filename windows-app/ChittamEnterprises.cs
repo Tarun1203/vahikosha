@@ -71,8 +71,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyProduct("Chittam Enterprises")]
 [assembly: System.Reflection.AssemblyCompany("Chittam Enterprises")]
 // keep in step with Program.DesktopVersion (build.ps1 checks)
-[assembly: System.Reflection.AssemblyVersion("3.7.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("3.7")]
+[assembly: System.Reflection.AssemblyVersion("3.8.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("3.8")]
 
 namespace ChittamEnterprises
 {
@@ -82,7 +82,7 @@ namespace ChittamEnterprises
         public const string ClassicUrl = "https://tarun1203.github.io/Chittamenterprises/";
         // where new versions of this program are published (desktop/ folder of the site)
         public const string UpdateUrl = "https://tarun1203.github.io/Chittamenterprises/desktop/version.json";
-        public const string DesktopVersion = "3.7";
+        public const string DesktopVersion = "3.8";
 
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
@@ -301,6 +301,8 @@ namespace ChittamEnterprises
         public string ApiKey = "AIzaSyCEk9hKMJzA05DdB0axSJ4k76-Jl9acmjc";
         public Dictionary<string, string> LastHash = new Dictionary<string, string>();
         public Dictionary<string, string> LastStatus = new Dictionary<string, string>();
+        // app payments already posted to Tally: "receiptId|Tally company" -> when and how much
+        public Dictionary<string, string> Posted = new Dictionary<string, string>();
 
         public static string Folder
         {
@@ -362,10 +364,15 @@ namespace ChittamEnterprises
             return new Settings();
         }
 
+        static readonly object saveLock = new object();
+        // the sync and the window both save: one at a time
         public void Save()
         {
-            Directory.CreateDirectory(Folder);
-            File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(this), Encoding.UTF8);
+            lock (saveLock)
+            {
+                Directory.CreateDirectory(Folder);
+                File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(this), Encoding.UTF8);
+            }
         }
     }
 
@@ -2693,7 +2700,13 @@ namespace ChittamEnterprises
             bool typeExists;
             try { typeExists = Tally.VoucherTypeNumbering(sync.Settings.TallyUrl, company, Tally.AppReceiptType) != null; }
             catch (Exception ex) { done("Couldn't read Tally's voucher types: " + ex.Message); return; }
-            var msg = "Create this voucher in Tally?\n\n" +
+            // the same payment posted before: say so, and only post again on purpose
+            var postedKey = receiptId + "|" + company;
+            string postedBefore = null;
+            if (receiptId.Length > 0 && sync.Settings.Posted != null) sync.Settings.Posted.TryGetValue(postedKey, out postedBefore);
+            var msg = (postedBefore != null ? "⚠ ALREADY POSTED: this payment was posted to " + company + " on " + postedBefore + ".\n" +
+                    "Post it again only if that voucher was deleted in Tally — otherwise it will be counted twice.\n\n" : "") +
+                "Create this voucher in Tally?\n\n" +
                 "Company:  " + company + "\n" +
                 "Voucher:  " + Tally.AppReceiptType + " (under Receipt)\n" +
                 "Date:  " + date.ToString("dd MMM yyyy") + "\n" +
@@ -2705,7 +2718,8 @@ namespace ChittamEnterprises
                 "\nAdjusted against:\n" + billText +
                 (typeExists ? "" : "\nFirst time in this company: the voucher type \"" + Tally.AppReceiptType + "\" (under Receipt) will be created, so receipts from the app show separately in the Day Book.\n");
             ShowWindow();
-            if (MessageBox.Show(this, msg, "Post to Tally", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            if (MessageBox.Show(this, msg, postedBefore != null ? "Post to Tally — already posted" : "Post to Tally", MessageBoxButtons.YesNo,
+                    postedBefore != null ? MessageBoxIcon.Warning : MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
             { done("Not posted."); return; }
             ThreadPool.QueueUserWorkItem(delegate {
                 string err = null;
@@ -2722,7 +2736,15 @@ namespace ChittamEnterprises
                     try { var token = Firebase.SignIn(sync.Settings); Firebase.LogVoucherPosted(sync.Settings, token, company, party, amount, into, dateIso, receiptId); } catch { }
                     sync.Start(true);   // bring the new voucher back so Tally Match shows it matched
                 }
-                BeginInvoke((Action)delegate { done(err); });
+                BeginInvoke((Action)delegate {
+                    if (err == null && receiptId.Length > 0)
+                    {
+                        if (sync.Settings.Posted == null) sync.Settings.Posted = new Dictionary<string, string>();
+                        sync.Settings.Posted[postedKey] = DateTime.Now.ToString("dd MMM yyyy h:mm tt") + " (₹" + amount.ToString("N2", CultureInfo.GetCultureInfo("en-IN")) + " into " + into + ")";
+                        try { sync.Settings.Save(); } catch (Exception ex) { sync.Log("Couldn't save the posted-payments list: " + ex.Message); }
+                    }
+                    done(err);
+                });
             });
         }
 

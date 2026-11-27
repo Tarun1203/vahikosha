@@ -1,10 +1,10 @@
 {
-    "version":  "3.7",
-    "published":  "2026-11-21 08:50",
+    "version":  "3.8",
+    "published":  "2026-11-27 13:09",
     "files":  [
                   {
                       "name":  "Chittam Enterprises.exe",
-                      "sha256":  "225fee7f47ab138350d26fa39e464d3f6a854f4dedceb8b4affc7718652f77a0"
+                      "sha256":  "62322e60a88a47bba785f1d90460bf3c73a5d83fe403c31853c44893d7c1e2c0"
                   },
                   {
                       "name":  "Chittam Enterprises.exe.config",

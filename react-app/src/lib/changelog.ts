@@ -4,6 +4,15 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.42", date: "2026-11-27", title: "Safety: a payment can't be posted to Tally twice by mistake", windows: "3.8",
+    items: [
+      "Post to Tally now marks the payment as posted (when, by whom, how much, into which ledger). Opening Post to Tally again shows “Already posted” in red, and the button stays off unless you tick that the earlier voucher was deleted in Tally.",
+      "The Windows app (3.8) also remembers every payment it posted and warns in its own confirmation (No is the default) if the same one comes again.",
+      "Database rules: only the listed staff logins can open the data, and encryption can no longer be turned off once it is on. (Publish the new rules in the Firebase console.)",
+      "Old app 3.3: the old “Cloud Sync – Google Sheet” card is removed. It sent the data unencrypted to a sheet anyone with the link could open, and its Pull could overwrite newer records.",
+    ],
+  },
+  {
     version: "3.41", date: "2026-11-27", title: "Remind opened in a new tab fills in the balances",
     items: [
       "A Payment Reminder opened from List of receivables in a new tab (or after a reload) now waits for the Tally balances before filling in, so the outstanding amounts are never left empty.",
