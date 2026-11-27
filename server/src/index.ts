@@ -26,6 +26,7 @@ import { CHITTAM_BUSINESS, inBusiness, pool } from "./db.ts";
 import { businessesOf, chooseBusiness, login, logout, membership, sessionUser, type SessionUser } from "./auth.ts";
 import { can, COLLECTION_MODULE, MODULE_LABEL, MODULES, permissions, usable, type Module, type Role } from "./roles.ts";
 import * as tally from "./tallyapi.ts";
+import { businessKeyRoutes, personKeyRoutes } from "./keys.ts";
 import { runMirror } from "./mirror-tally.ts";
 import { copyFromFirebase } from "./firebase-copy.ts";
 
@@ -46,7 +47,7 @@ async function modulesOf(business: string): Promise<Record<Module, boolean>> {
   return out;
 }
 const COLLECTIONS = new Set(["customers", "products", "transports", "orders", "services", "receipts", "messages", "settings"]);
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const MIRROR_MINUTES = 15;
 const COPY_MINUTES = 5;
 
@@ -148,6 +149,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return send(res, 403, { error: "Chittam support can't open business data." });
   }
 
+  // ---- my own key pair (needs no business)
+  if (await personKeyRoutes(req, res, parts, me.id, db, send, readBody)) return;
+
   // ---- which business
   if (parts[1] === "businesses" && req.method === "GET") return send(res, 200, await businessesOf(db, me.id));
   if (parts[1] === "business" && parts[2] === "select" && req.method === "POST") {
@@ -163,6 +167,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   const refuse = (what: string) => send(res, 403, { error: "Your role (" + ROLE_LABEL[m.role] + ") can't " + what + "." });
   const chittamOnly = () => send(res, 400, { error: "This works only for Chittam Enterprises for now. Other businesses get the Tally connector in a later update." });
   const modules = await modulesOf(biz);
+
+  if (await businessKeyRoutes({ req, res, parts, userId: me.id, email: user, m, db, run, send, readBody, refuse })) return;
 
   if (parts[1] === "business" && !parts[2] && req.method === "GET") {
     return send(res, 200, { id: biz, name: m.businessName, role: m.role, permissions: permissions(m), accountantCanApprove: m.accountantCanApprove, modules });
