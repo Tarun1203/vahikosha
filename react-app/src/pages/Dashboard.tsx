@@ -14,9 +14,10 @@ import { Columns, HBars, MUTED_MARK, RAMP4, Segmented, StatTile, shortInr } from
 import { useTallyFreshness } from "@/components/TallyFreshness";
 import { useStore } from "@/lib/store";
 import { useCompanies, receiptTotal } from "@/lib/companies";
-import { useTallyBills, syncedWhen } from "@/lib/tallydata";
+import { stockOf, useTallyBills, useTallyStock, syncedWhen } from "@/lib/tallydata";
+import { partyKey } from "@/lib/parties";
 import { ageOf, r2, receivableRows } from "@/lib/receivables";
-import { listenDoc, saveRecord } from "@/lib/data";
+import { listenDoc, loadTallyVouchers, normalizeName, saveRecord, type TallyVoucherSet } from "@/lib/data";
 import { greeting, inr, todayISO } from "@/lib/format";
 import { msgDate } from "@/lib/messages";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ const dayISO = (back: number) => { const d = new Date(); d.setDate(d.getDate() -
 const BUCKETS = [{ label: "0–30 days", max: 30 }, { label: "31–60 days", max: 60 }, { label: "61–90 days", max: 90 }, { label: "Over 90 days", max: Infinity }];
 const OPEN_ORDERS = ["Pending", "Confirmed", "Packed", "Dispatched"];
 const OPEN_JOBS = ["Received", "Under Service", "Ready to Return"];
+const isDemo = () => import.meta.env.DEV && new URLSearchParams(location.search).has("demo");
 
 function Widget({ title, note, children, className, to, toLabel }: { title: string; note?: string; children: ReactNode; className?: string; to?: string; toLabel?: string }) {
   return (
@@ -230,6 +232,136 @@ function Deliveries({ f }: { f: Figures }) {
   );
 }
 
+// Tally transactions (and purchases by supplier), read once and only when a widget needs them
+let vouchersOnce: Promise<Record<string, TallyVoucherSet>> | null = null;
+function useTallyVouchers() {
+  const [sets, setSets] = useState<Record<string, TallyVoucherSet> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (!vouchersOnce) vouchersOnce = (import.meta.env.DEV && new URLSearchParams(location.search).has("demo") ? import("@/lib/demo").then((d) => d.demoTallyVouchers as Record<string, TallyVoucherSet>) : loadTallyVouchers()).catch(() => ({}));
+    vouchersOnce.then((s) => { if (alive) setSets(s); });
+    return () => { alive = false; };
+  }, []);
+  return sets;
+}
+
+// what was ordered in the app in the last 90 days, by product (cancelled orders left out)
+function useOrdered() {
+  const { orders } = useStore();
+  return useMemo(() => {
+    const from = dayISO(89), by = new Map<string, { name: string; qty: number; value: number }>();
+    for (const o of orders) {
+      if (o.status === "Cancelled" || (o.date || "") < from) continue;
+      for (const it of o.items || []) {
+        const k = normalizeName(it.name);
+        if (!k) continue;
+        const x = by.get(k) || { name: it.name, qty: 0, value: 0 };
+        x.qty += Number(it.qty) || 0; x.value += Number(it.amount) || 0;
+        by.set(k, x);
+      }
+    }
+    return by;
+  }, [orders]);
+}
+
+function BestSelling() {
+  const top = [...useOrdered().values()].filter((x) => x.qty > 0).sort((a, b) => b.qty - a.qty || b.value - a.value).slice(0, 8);
+  return (
+    <Widget title="Best-selling items, last 90 days" note="By quantity ordered in the app (Orders)" to="/orders" toLabel="Orders">
+      {!top.length ? <Empty text="No orders in the last 90 days." /> : (
+        <HBars format={(n) => String(n)} rows={top.map((x) => ({ key: x.name, label: x.name + (x.value ? " · " + shortInr(x.value) : ""), value: x.qty, tip: <>{x.name}: <b>{x.qty}</b> ordered{x.value ? <>, {inr(r2(x.value))}</> : null}</> }))} />
+      )}
+    </Widget>
+  );
+}
+
+function BestDealers() {
+  const { customers } = useStore();
+  const sets = useTallyVouchers();
+  const top = useMemo(() => {
+    if (!sets) return null;
+    const from = dayISO(89), by = new Map<string, { name: string; amount: number; count: number; id?: string }>();
+    for (const set of Object.values(sets)) for (const v of set.vouchers || []) {
+      if (!v.dr || v.d < from || !/sale/i.test(v.t) || /return|credit|order/i.test(v.t)) continue;
+      const k = partyKey(v.p);
+      const c = customers.find((x) => partyKey(x.name) === k);
+      const x = by.get(k) || { name: c?.name || v.p, amount: 0, count: 0, id: c?.id };
+      x.amount += v.a; x.count++;
+      by.set(k, x);
+    }
+    return [...by.values()].sort((a, b) => b.amount - a.amount).slice(0, 8);
+  }, [sets, customers]);
+  return (
+    <Widget title="Best dealers, last 90 days" note="Sales in Tally, every company added up" to="/receivables" toLabel="Receivables">
+      {!top ? <Loading what="Tally sales" /> : !top.length ? <Empty text="No Tally sales in the last 90 days." /> : (
+        <HBars rows={top.map((x) => ({ key: x.name, label: x.name + " · " + x.count + " bill" + (x.count === 1 ? "" : "s"), value: r2(x.amount), to: x.id ? "/ledger?c=" + x.id : undefined,
+          tip: <>{x.name}: <b>{inr(r2(x.amount))}</b> in {x.count} bill{x.count === 1 ? "" : "s"}</> }))} />
+      )}
+    </Widget>
+  );
+}
+
+function TopSuppliers() {
+  const sets = useTallyVouchers();
+  const data = useMemo(() => {
+    if (!sets) return null;
+    const by = new Map<string, { name: string; amount: number; count: number; last: string }>();
+    let any = false, from = "";
+    for (const set of Object.values(sets)) {
+      if (!set.purchases) continue;
+      any = true; if (set.from && (!from || set.from < from)) from = set.from;
+      for (const p of set.purchases) {
+        const k = normalizeName(p.p);
+        const x = by.get(k) || { name: p.p, amount: 0, count: 0, last: "" };
+        x.amount += p.a; x.count += p.c; if (p.d > x.last) x.last = p.d;
+        by.set(k, x);
+      }
+    }
+    return { any, from, top: [...by.values()].sort((a, b) => b.amount - a.amount).slice(0, 8) };
+  }, [sets]);
+  return (
+    <Widget title="Top suppliers" note={"Purchases in Tally" + (data?.from ? " since " + msgDate(data.from) : "") + ", every company added up"}>
+      {!data ? <Loading what="Tally purchases" /> : !data.any ? <Empty text="Update the Windows app on the Tally PC (3.11) — suppliers appear after its next sync." /> : !data.top.length ? <Empty text="No purchases in Tally in this period." /> : (
+        <HBars rows={data.top.map((x) => ({ key: x.name, label: x.name + " · " + x.count + " bill" + (x.count === 1 ? "" : "s") + " · last " + msgDate(x.last), value: r2(x.amount),
+          tip: <>{x.name}: <b>{inr(r2(x.amount))}</b> in {x.count} bill{x.count === 1 ? "" : "s"}</> }))} />
+      )}
+    </Widget>
+  );
+}
+
+// items ordered recently whose stock (all companies) lasts less than two weeks at that pace
+function LowStock() {
+  const stock = useTallyStock();
+  const ordered = useOrdered();
+  const rows = useMemo(() => {
+    if (!stock) return null;
+    const out: { name: string; left: number; unit: string; days: number }[] = [];
+    for (const x of ordered.values()) {
+      const s = stockOf(stock, x.name);
+      if (!s || x.qty <= 0) continue;
+      const days = s.total <= 0 ? 0 : Math.floor(s.total / (x.qty / 90));
+      if (days <= 14) out.push({ name: x.name, left: s.total, unit: s.unit, days });
+    }
+    return out.sort((a, b) => a.days - b.days || a.left - b.left).slice(0, 10);
+  }, [stock, ordered]);
+  return (
+    <Widget title="Stock running low" note="Items ordered in the last 90 days with stock (Tally, all companies) for 2 weeks or less at that pace">
+      {!rows ? <Loading what="Tally stock" /> : !rows.length ? <Empty text={ordered.size ? "Nothing running low." : "No orders in the last 90 days to judge from."} /> : (
+        <ul className="divide-y divide-neutral-100 text-sm">
+          {rows.map((r) => (
+            <li key={r.name} className="flex items-center justify-between gap-2 py-1.5">
+              <span className="min-w-0 truncate">{r.name}</span>
+              <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs font-semibold", r.left <= 0 ? "text-rose-700" : "text-amber-800")}>
+                <IconAlertTriangle size={12} />{r.left <= 0 ? "Out of stock" : r.left + (r.unit ? " " + r.unit : "") + " left · about " + r.days + " day" + (r.days === 1 ? "" : "s")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Widget>
+  );
+}
+
 // size: how wide on a big screen (the grid has 6 columns); on phones every widget is full width
 export const WIDGETS: { id: string; title: string; size: "full" | "half" | "third"; on: boolean; C: (p: { f: Figures }) => ReactNode }[] = [
   { id: "headline", title: "Headline figures (owed, overdue, parties, payments)", size: "full", on: true, C: Headline },
@@ -242,6 +374,10 @@ export const WIDGETS: { id: string; title: string; size: "full" | "half" | "thir
   { id: "routes", title: "Owed by route", size: "half", on: false, C: ByRoute },
   { id: "modes", title: "Payments by mode", size: "half", on: false, C: ByMode },
   { id: "deliveries", title: "Deliveries due this week", size: "third", on: false, C: Deliveries },
+  { id: "bestselling", title: "Best-selling items (orders)", size: "half", on: true, C: BestSelling },
+  { id: "dealers", title: "Best dealers (Tally sales)", size: "half", on: true, C: BestDealers },
+  { id: "suppliers", title: "Top suppliers (Tally purchases)", size: "half", on: true, C: TopSuppliers },
+  { id: "lowstock", title: "Stock running low", size: "half", on: true, C: LowStock },
 ];
 const SPAN = { full: "lg:col-span-6", half: "lg:col-span-3", third: "lg:col-span-2" };
 
@@ -250,7 +386,6 @@ const SPAN = { full: "lg:col-span-6", half: "lg:col-span-3", third: "lg:col-span
 // saved: the order and what's hidden (so widgets added later show up by themselves)
 interface Layout { order: string[]; hidden: string[] }
 const DEFAULT: Layout = { order: WIDGETS.map((w) => w.id), hidden: WIDGETS.filter((w) => !w.on).map((w) => w.id) };
-const isDemo = () => import.meta.env.DEV && new URLSearchParams(location.search).has("demo");
 function arrange(l: Layout) {
   const known = l.order.filter((id) => WIDGETS.some((w) => w.id === id));
   const order = [...known, ...WIDGETS.map((w) => w.id).filter((id) => !known.includes(id))];

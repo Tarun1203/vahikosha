@@ -109,7 +109,7 @@ export const demoTallyVouchers: Record<string, TallyVoucherSet> = {
     { d: iso(-3), t: "Sales", n: "CE/245", p: "Kashi SLN", a: 12900, dr: true, id: "v4" },
     { d: iso(-2), t: "Sales", n: "CE/247", p: "Kashi SLN", a: 12900, dr: true, id: "v5" },
     { d: iso(-6), t: "Sales", n: "CE/240", p: "Deepak", a: 4300, dr: true, id: "v6" },
-  ] },
+  ], purchases: [{ p: "Sri Ram Suppliers", a: 185000, c: 6, d: iso(-4) }, { p: "Makwell Electricals Pvt Ltd", a: 92500, c: 3, d: iso(-11) }] },
   cash: { company: "cash", label: "Cash Bill", tallyCompany: "Cash", from: iso(-90), to: iso(0), syncedAt: new Date(Date.now() - 1800e3).toISOString(), count: 2, vouchers: [
     { d: iso(-1), t: "Receipt", n: "12", p: "Badrinath Allundi - Raichur", a: 2500, dr: false, via: "Cash", id: "c1" },
     { d: iso(-3), t: "Receipt", n: "11", p: "Lokesh - Kallur", a: 3000, dr: false, via: "Cash", id: "c0" },

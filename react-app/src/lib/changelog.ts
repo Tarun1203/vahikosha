@@ -4,6 +4,16 @@ export interface Release { version: string; date: string; title: string; items: 
 
 export const RELEASES: Release[] = [
   {
+    version: "3.46", date: "2026-11-27", title: "Dashboard: best sellers, best dealers, suppliers, low stock", windows: "3.11",
+    items: [
+      "Best-selling items: what was ordered most in the app in the last 90 days.",
+      "Best dealers: Tally sales in the last 90 days per dealer, every company and brand ledger added up (tap a name for its ledger).",
+      "Top suppliers: Tally purchases per supplier this year. The Windows app 3.11 now sends them (from the transactions it already reads — no extra load on Tally).",
+      "Stock running low: items ordered recently whose stock in Tally (all companies) lasts two weeks or less at that pace, and items out of stock.",
+      "All four are on by default; hide or move them with Customize.",
+    ],
+  },
+  {
     version: "3.45", date: "2026-11-27", title: "Vahikosha — the app's new name, and your own dashboard", windows: "3.10",
     items: [
       "The app is now called Vahikosha, with its new logo — in the menu, the phone top bar, sign-in, the browser tab, the installed-app icon and the Windows app (window, tray, installer). Your business name (Chittam Enterprises) stays on messages, PDFs and the menu.",

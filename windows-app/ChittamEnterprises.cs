@@ -71,8 +71,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyProduct("Vahikosha")]
 [assembly: System.Reflection.AssemblyCompany("Chittam Enterprises")]
 // keep in step with Program.DesktopVersion (build.ps1 checks)
-[assembly: System.Reflection.AssemblyVersion("3.10.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("3.10")]
+[assembly: System.Reflection.AssemblyVersion("3.11.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("3.11")]
 
 namespace ChittamEnterprises
 {
@@ -82,7 +82,7 @@ namespace ChittamEnterprises
         public const string ClassicUrl = "https://tarun1203.github.io/Chittamenterprises/";
         // where new versions of this program are published (desktop/ folder of the site)
         public const string UpdateUrl = "https://tarun1203.github.io/Chittamenterprises/desktop/version.json";
-        public const string DesktopVersion = "3.10";
+        public const string DesktopVersion = "3.11";
 
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
@@ -401,6 +401,8 @@ namespace ChittamEnterprises
     // every party ledger (Sundry Debtors "D" / Sundry Creditors "C") with its mobile and Tally aliases
     class Party { public string Name, Group, Parent, Gstin, Mobile; public List<string> Aliases = new List<string>(); }
     class Bill { public string Party, Ref, Date, Due; public double Amount; public int Overdue; }
+    // purchases from one supplier in the synced period (from the same voucher download, no extra Tally request)
+    class Purchase { public string Party, Last = ""; public double Amount; public int Count; }
 
     static class Tally
     {
@@ -812,7 +814,7 @@ namespace ChittamEnterprises
 
         // vouchers between two dates that involve one of the given customer
         // ledgers (debtors), from Tally's Day Book
-        public static List<Voucher> Vouchers(string url, string company, DateTime from, DateTime to, ICollection<string> debtorKeys)
+        public static List<Voucher> Vouchers(string url, string company, DateTime from, DateTime to, ICollection<string> debtorKeys, out List<Purchase> purchases)
         {
             // read straight from the vouchers, filtered by date: the Day Book report
             // follows whatever period / view is open on Tally's screen, so it can come back empty
@@ -827,7 +829,36 @@ namespace ChittamEnterprises
                 "<FILTER>ChittamInRange</FILTER></COLLECTION>" +
                 "<SYSTEM TYPE=\"Formulae\" NAME=\"ChittamInRange\">$Date &gt;= $$Date:\"" + f + "\" AND $Date &lt;= $$Date:\"" + t + "\"</SYSTEM>" +
                 "</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>");
+            purchases = ParsePurchases(xml);
             return ParseVouchers(xml, debtorKeys);
+        }
+
+        // purchase vouchers added up by supplier (the voucher's party ledger), biggest first
+        public static List<Purchase> ParsePurchases(string xml)
+        {
+            var doc = new XmlDocument();
+            doc.LoadXml(xml);
+            var by = new Dictionary<string, Purchase>();
+            foreach (XmlNode v in doc.SelectNodes("//VOUCHER"))
+            {
+                if (Text(v, "ISCANCELLED") == "Yes" || Text(v, "ISOPTIONAL") == "Yes" || Text(v, "ISDELETED") == "Yes") continue;
+                var vtype = Text(v, "VOUCHERTYPENAME");
+                if (vtype.Length == 0 && v.Attributes["VCHTYPE"] != null) vtype = v.Attributes["VCHTYPE"].Value;
+                if (vtype.IndexOf("purchase", StringComparison.OrdinalIgnoreCase) < 0 || vtype.IndexOf("order", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                string party = Text(v, "PARTYLEDGERNAME"), date = Text(v, "DATE");
+                if (party.Length == 0 || date.Length != 8) continue;
+                var entries = v.SelectNodes("ALLLEDGERENTRIES.LIST[LEDGERNAME!='']");
+                if (entries.Count == 0) entries = v.SelectNodes("LEDGERENTRIES.LIST[LEDGERNAME!='']");
+                double amount = 0;
+                foreach (XmlNode e in entries) if (Normalize(Text(e, "LEDGERNAME")) == Normalize(party)) amount += Num(Text(e, "AMOUNT"));
+                if (amount == 0) continue;
+                var iso = date.Substring(0, 4) + "-" + date.Substring(4, 2) + "-" + date.Substring(6, 2);
+                Purchase p;
+                if (!by.TryGetValue(Normalize(party), out p)) by[Normalize(party)] = p = new Purchase { Party = party };
+                p.Amount = Math.Round(p.Amount + Math.Abs(amount), 2); p.Count++;
+                if (string.CompareOrdinal(iso, p.Last) > 0) p.Last = iso;
+            }
+            return by.Values.OrderByDescending(p => p.Amount).Take(100).ToList();
         }
 
         // one voucher in full (items, taxes, addresses, bills, bank details), to print it like Tally
@@ -1448,8 +1479,10 @@ namespace ChittamEnterprises
             Log(s, token, "tally-bills-synced", label, new Dictionary<string, object> { { "name", Str(label) }, { "company", Str(company) }, { "count", Int(bills.Count) } });
         }
 
-        public static void SaveVouchers(Settings s, string token, string key, string label, string company, DateTime from, DateTime to, List<Voucher> vouchers)
+        public static void SaveVouchers(Settings s, string token, string key, string label, string company, DateTime from, DateTime to, List<Voucher> vouchers, List<Purchase> purchases)
         {
+            var pvalues = (purchases ?? new List<Purchase>()).Select(p => (object)Map(new Dictionary<string, object> {
+                { "p", Str(p.Party) }, { "a", Dbl(p.Amount) }, { "c", Int(p.Count) }, { "d", Str(p.Last) } })).ToArray();
             string now = Now();
             var values = vouchers.Select(v => (object)Map(new Dictionary<string, object> {
                 { "d", Str(v.Date) }, { "t", Str(v.Type) }, { "n", Str(v.Number) }, { "p", Str(v.Party) },
@@ -1460,6 +1493,7 @@ namespace ChittamEnterprises
                 { "from", Str(from.ToString("yyyy-MM-dd")) }, { "to", Str(to.ToString("yyyy-MM-dd")) },
                 { "syncedAt", Str(now) }, { "count", Int(vouchers.Count) },
                 { "vouchers", new Dictionary<string, object> { { "arrayValue", new Dictionary<string, object> { { "values", values } } } } },
+                { "purchases", new Dictionary<string, object> { { "arrayValue", new Dictionary<string, object> { { "values", pvalues } } } } },
                 { "at", Ts(now) }, { "by", Str(s.Email) }
             };
             Send("PATCH", BaseUrl(s) + "tallyVouchers/" + key, token, new Dictionary<string, object> { { "fields", Seal(s, "tallyVouchers", fields) } });
@@ -1719,17 +1753,18 @@ namespace ChittamEnterprises
                 // this company's own "sync from" date, when one is set
                 DateTime own;
                 if (DateTime.TryParseExact(Settings.SyncFromFor(key), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out own) && own <= to) from = own;
-                List<Voucher> vouchers;
-                try { vouchers = Tally.Vouchers(Settings.TallyUrl, company, from, to, new HashSet<string>(bal.Keys)); }
+                List<Voucher> vouchers; List<Purchase> purchases;
+                try { vouchers = Tally.Vouchers(Settings.TallyUrl, company, from, to, new HashSet<string>(bal.Keys), out purchases); }
                 catch (Exception ex) { Log("[" + company + "] transactions skipped: " + ex.Message); continue; }
                 // newest first; keep the upload well inside Firestore's 1 MB limit
                 vouchers = vouchers.OrderByDescending(v => v.Date).Take(3000).ToList();
                 var vsig = string.Join("\n", vouchers.Select(v => v.Date + "|" + v.Type + "|" + v.Number + "|" + v.Party + "|" +
                     v.Amount.ToString(CultureInfo.InvariantCulture) + "|" + v.Debit + "|" + v.Id + "|" + v.Narration + "|" + v.Via));
+                vsig += "\n#" + string.Join("\n", purchases.Select(p => p.Party + "|" + p.Amount.ToString(CultureInfo.InvariantCulture) + "|" + p.Count + "|" + p.Last));
                 string vhash = Hash(from.ToString("yyyyMMdd") + vsig), vkey = "v-" + key, vlast;
                 if (!force && Settings.LastHash.TryGetValue(vkey, out vlast) && vlast == vhash) { Log("[" + company + "] transactions: no change"); continue; }
                 if (token == null) token = Firebase.SignIn(Settings);
-                Firebase.SaveVouchers(Settings, token, key, label, company, from, to, vouchers);
+                Firebase.SaveVouchers(Settings, token, key, label, company, from, to, vouchers, purchases);
                 Settings.LastHash[vkey] = vhash;
                 Settings.LastStatus[vkey] = DateTime.Now.ToString("dd MMM yyyy, h:mm tt") + " · " + vouchers.Count + " transactions";
                 Settings.Save();

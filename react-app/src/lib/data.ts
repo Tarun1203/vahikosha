@@ -286,7 +286,8 @@ export async function saveBalances(company: string, entry: BalanceSet & { matche
 // dr customer debited (sale) / credited (receipt), nar narration, id Tally GUID
 // via: the other ledger(s) in the voucher — Cash, a bank… (how it was booked)
 export interface TallyVoucher { d: string; t: string; n: string; p: string; a: number; dr: boolean; nar?: string; via?: string; id?: string }
-export interface TallyVoucherSet { company: string; label?: string; tallyCompany?: string; from?: string; to?: string; syncedAt?: string; count?: number; vouchers: TallyVoucher[] }
+// purchases: purchase vouchers added up by supplier (Windows app 3.11+): p party, a amount, c bills, d last date
+export interface TallyVoucherSet { company: string; label?: string; tallyCompany?: string; from?: string; to?: string; syncedAt?: string; count?: number; vouchers: TallyVoucher[]; purchases?: { p: string; a: number; c: number; d: string }[] }
 // read once when the Tally Match page opens (a few hundred KB; not kept live)
 export async function loadTallyVouchers() {
   const snap = await getDocs(collection(db, "tallyVouchers"));
