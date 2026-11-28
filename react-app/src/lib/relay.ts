@@ -17,9 +17,17 @@ export type { DocumentData, Timestamp, User };
 export interface Doc { id: string; data: DocumentData }
 type Unsub = () => void;
 
-// where a record lives (the one place the workspace prefix will be added)
-const ref = (coll: string, id: string) => doc(db, coll, id);
-const coll = (name: string) => collection(db, name);
+// The business's workspace: records then live at workspaces/{wid}/{collection}/{id}.
+// null until the cut-over (docs/design-multi-customer-sync.md): until then the
+// top-level paths are used, exactly as before.
+let workspace: string | null = null;
+export const setWorkspace = (wid: string | null) => { workspace = wid; };
+export const currentWorkspace = () => workspace;
+export const recordPath = (name: string) => (workspace ? `workspaces/${workspace}/${name}` : name);
+
+// where a record lives (the one place the workspace prefix is added)
+const ref = (coll: string, id: string) => doc(db, recordPath(coll), id);
+const coll = (name: string) => collection(db, recordPath(name));
 
 // "the time on the server when this reached it"
 export const serverTime = () => serverTimestamp();

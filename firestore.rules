@@ -121,5 +121,136 @@ service cloud.firestore {
       allow create: if signedIn() && stampedBySelf() && sealed();
       allow update, delete: if false;
     }
+
+    /* ================= Workspaces (Vahikosha: many businesses) =================
+       docs/design-multi-customer-sync.md, "Data layout" and "Firestore rules".
+       Nothing above changes: today's apps keep using the top-level paths until
+       the cut-over. Every business has its own workspaces/{wid}; only its
+       members get in, and the role in members/{uid} decides what they may write.
+       Nothing in a workspace can ever be deleted. */
+
+    function wsPath(wid)      { return /databases/$(database)/documents/workspaces/$(wid); }
+    function meDoc(wid)       { return /databases/$(database)/documents/workspaces/$(wid)/members/$(request.auth.uid); }
+    // an active member: listed, not removed, and (for an Outside CA) before the end date
+    function member(wid) {
+      return request.auth != null && exists(meDoc(wid)) &&
+        !('removedAt' in get(meDoc(wid)).data) &&
+        (!('until' in get(meDoc(wid)).data) || get(meDoc(wid)).data.until > request.time);
+    }
+    function role(wid)        { return get(meDoc(wid)).data.role; }
+    function owner(wid)       { return member(wid) && get(wsPath(wid)).data.ownerUid == request.auth.uid; }
+    // may approve devices and people: the owner, or an Accountant the owner allowed
+    function approver(wid) {
+      return owner(wid) || (member(wid) && role(wid) == 'accountant' && get(meDoc(wid)).data.canApprove == true);
+    }
+    // the business records (same names as today's top-level collections)
+    function recordColls() {
+      return ['customers', 'products', 'orders', 'receipts', 'services', 'transports', 'messages',
+              'balances', 'tallyBills', 'tallyStock', 'tallyVouchers', 'settings'];
+    }
+    // the day-to-day screens Staff may change (orders, receipts, jobs, dispatch, messages)
+    function staffColls()     { return ['orders', 'receipts', 'services', 'transports', 'messages']; }
+    function mayWrite(wid, coll) {
+      return member(wid) && (role(wid) == 'owner' || role(wid) == 'accountant' ||
+        (role(wid) == 'staff' && coll in staffColls()));
+    }
+    // inside a workspace every record is always encrypted: a new "enc" on every write
+    function sealedRecord() {
+      return 'enc' in request.resource.data &&
+        (resource == null || request.resource.data.enc != resource.data.enc);
+    }
+    // only the payment system (a Cloud Function, not an app) sets these
+    function billingFields()  { return ['status', 'plan', 'trialEnds', 'paidUntil']; }
+
+    match /workspaces/{wid} {
+      // the person creating it becomes its owner, in the same batch, on a trial
+      allow create: if request.auth != null &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.status == 'trial' &&
+        !request.resource.data.keys().hasAny(['plan', 'trialEnds', 'paidUntil']) &&
+        getAfter(/databases/$(database)/documents/workspaces/$(wid)/members/$(request.auth.uid)).data.role == 'owner';
+      allow read: if member(wid);
+      // the owner may rename it; the owner and the billing fields never change from an app
+      allow update: if owner(wid) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerUid', 'createdAt'].concat(billingFields()));
+      allow delete: if false;
+
+      // who is in the business, and their role
+      match /members/{uid} {
+        allow read: if member(wid);
+        // the first member: the creator, as owner, together with the new workspace
+        allow create: if (uid == request.auth.uid && !exists(wsPath(wid)) &&
+            getAfter(wsPath(wid)).data.ownerUid == request.auth.uid &&
+            request.resource.data.role == 'owner') ||
+          // later members: added by an approver, never as a second owner
+          (approver(wid) && request.resource.data.role in ['accountant', 'staff', 'ca'] &&
+            (request.resource.data.role == 'accountant' || !('canApprove' in request.resource.data) || request.resource.data.canApprove == false) &&
+            !('removedAt' in request.resource.data));
+        // an approver may change a role or end date; the owner's own entry never changes,
+        // only the owner may give or take approval, and a removal can't be undone
+        allow update: if approver(wid) &&
+          resource.data.role != 'owner' &&
+          request.resource.data.role in ['accountant', 'staff', 'ca'] &&
+          (owner(wid) || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['canApprove'])) &&
+          (!('removedAt' in resource.data) || request.resource.data.removedAt == resource.data.removedAt);
+        allow delete: if false;
+      }
+
+      // each signed-in device; a member adds their own, an approver approves or logs it out
+      match /devices/{id} {
+        allow read: if member(wid);
+        allow create: if member(wid) && request.resource.data.uid == request.auth.uid &&
+          !('revokedAt' in request.resource.data) && !('approvedBy' in request.resource.data);
+        allow update: if member(wid) &&
+          (!('revokedAt' in resource.data) || request.resource.data.revokedAt == resource.data.revokedAt) &&
+          (approver(wid) ||
+            (resource.data.uid == request.auth.uid &&
+             !request.resource.data.diff(resource.data).affectedKeys().hasAny(['uid', 'approvedBy', 'revokedAt', 'publicKey'])));
+        allow delete: if false;
+      }
+
+      // the data key, wrapped for one device: only that device's person reads it
+      match /keys/{id} {
+        allow read: if member(wid) &&
+          get(/databases/$(database)/documents/workspaces/$(wid)/devices/$(id)).data.uid == request.auth.uid;
+        allow create, update: if approver(wid);
+        allow delete: if false;
+      }
+
+      // the data key wrapped with the recovery passphrase (doc id "current")
+      match /recovery/{id} {
+        allow read: if member(wid);
+        allow create, update: if owner(wid);
+        allow delete: if false;
+      }
+
+      // QR pairing is built in a later work package: closed until then
+      match /pairing/{code} {
+        allow read, write: if false;
+      }
+
+      // history: added to only, by the person themselves, encrypted
+      match /activity/{id} {
+        allow read: if member(wid);
+        allow create: if member(wid) && role(wid) != 'ca' && sealedRecord() &&
+          request.resource.data.by in [request.auth.uid, request.auth.token.email];
+        allow update, delete: if false;
+      }
+
+      // every business record
+      match /{coll}/{id} {
+        allow read: if coll in recordColls() && member(wid);
+        allow create: if coll in recordColls() && mayWrite(wid, coll) && sealedRecord();
+        // messages are a log: added to, never changed
+        allow update: if coll in recordColls() && coll != 'messages' && mayWrite(wid, coll) && sealedRecord();
+        allow delete: if false;
+      }
+    }
+
+    // which workspaces to show this person at sign-in: only they read and write it
+    match /users/{uid} {
+      allow read, create, update: if request.auth != null && request.auth.uid == uid;
+      allow delete: if false;
+    }
   }
 }
